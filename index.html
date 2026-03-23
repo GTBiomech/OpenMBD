@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenMBD - Multibody Dynamics Simulator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne+Mono&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0c0e;--bg1:#111518;--bg2:#181d22;--bg3:#1f262e;--bg4:#28323c;
+  --border:#263040;--border2:#334455;
+  --amber:#e8a020;--amber2:#ffbb44;--amber-dim:rgba(232,160,32,0.12);--amber-glow:rgba(232,160,32,0.06);
+  --teal:#38b2ac;--blue:#4a90d9;--red:#e05555;--green:#55c885;
+  --txt:#b8c8d8;--txt2:#6a8090;--txt3:#8090a0;--txtbright:#e8f0f8;
+  --mono:'Syne Mono',monospace;--sans:'Syne',sans-serif;
+}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--txt);font-family:var(--sans);overflow-x:hidden;line-height:1.6}
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:2px}
+::-webkit-scrollbar-thumb:hover{background:var(--border2)}
+
+/* ── TOPBAR ── */
+#topbar{
+  position:fixed;top:0;left:0;right:0;z-index:100;
+  height:48px;
+  background:rgba(10,12,14,0.92);
+  border-bottom:1px solid var(--border);
+  backdrop-filter:blur(12px);
+  display:flex;align-items:center;padding:0 20px;gap:8px;
+}
+.logo{font-family:var(--sans);font-weight:800;font-size:16px;color:var(--amber);letter-spacing:3px;text-transform:uppercase;text-decoration:none}
+.logo span{color:var(--txt2);font-weight:400}
+.tbsep{width:1px;height:22px;background:var(--border2);margin:0 4px}
+.tbspc{flex:1}
+.nav-link{
+  font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:1px;
+  text-transform:uppercase;color:var(--txt2);text-decoration:none;padding:4px 10px;
+  transition:color .15s;
+}
+.nav-link:hover{color:var(--amber)}
+.tbtn{
+  height:30px;padding:0 14px;background:var(--bg3);border:1px solid var(--border2);
+  border-radius:2px;color:var(--txt);font-family:var(--sans);font-size:11px;
+  font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px;
+  transition:all .15s;white-space:nowrap;letter-spacing:.5px;text-transform:uppercase;
+  text-decoration:none;
+}
+.tbtn:hover{background:var(--bg4);border-color:var(--amber);color:var(--amber)}
+.tbtn.pri{background:var(--amber);color:#0a0c0e;border-color:var(--amber)}
+.tbtn.pri:hover{background:var(--amber2)}
+/* hamburger */
+#hamburger{
+  display:none;flex-direction:column;justify-content:center;gap:5px;
+  width:32px;height:32px;cursor:pointer;flex-shrink:0;
+  background:#000;border:1px solid #000;border-radius:3px;padding:7px 6px;
+}
+#hamburger span{display:block;height:1.5px;background:var(--amber);border-radius:1px;transition:all .2s}
+/* mobile nav drawer */
+#mobile-nav{
+  display:none;position:fixed;top:48px;left:0;right:0;
+  background:rgba(10,12,14,0.97);border-bottom:1px solid var(--border);
+  z-index:99;flex-direction:column;padding:8px 0;
+}
+#mobile-nav.open{display:flex}
+#mobile-nav a{
+  font-family:var(--sans);font-size:13px;font-weight:600;letter-spacing:1px;
+  text-transform:uppercase;color:var(--txt2);text-decoration:none;
+  padding:14px 24px;border-bottom:1px solid var(--border);transition:color .15s;
+}
+#mobile-nav a:last-child{border-bottom:none}
+#mobile-nav a:hover{color:var(--amber)}
+@media(max-width:640px){
+  .nav-link,.tbsep{display:none}
+  #hamburger{display:flex}
+  .tbtn.pri{font-size:10px;padding:0 10px}
+}
+
+/* ── HERO ── */
+#hero{
+  min-height:100vh;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  position:relative;overflow:hidden;padding-top:48px;
+}
+#hero-canvas{position:absolute;inset:0;opacity:0.55}
+
+/* animated grid */
+#hero::before{
+  content:'';position:absolute;inset:0;
+  background-image:
+    linear-gradient(var(--border) 1px,transparent 1px),
+    linear-gradient(90deg,var(--border) 1px,transparent 1px);
+  background-size:60px 60px;
+  mask-image:radial-gradient(ellipse 80% 60% at 50% 50%,black 30%,transparent 100%);
+  opacity:0.5;
+}
+
+.hero-content{
+  position:relative;z-index:2;
+  text-align:center;
+  display:flex;flex-direction:column;align-items:center;gap:28px;
+  padding:0 24px;max-width:780px;
+}
+.hero-badge{
+  display:inline-flex;align-items:center;gap:8px;
+  background:var(--amber-dim);border:1px solid rgba(232,160,32,0.3);
+  border-radius:2px;padding:5px 14px;
+  font-family:var(--mono);font-size:10px;color:var(--amber);letter-spacing:2px;
+  text-transform:uppercase;
+  animation:fadeDown 0.6s ease both;
+}
+.badge-dot{width:5px;height:5px;background:var(--amber);border-radius:50%;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.4;transform:scale(0.7)}}
+
+.hero-logo{
+  font-family:var(--sans);font-weight:800;font-size:clamp(48px,10vw,88px);
+  color:var(--amber);letter-spacing:clamp(2px,1.5vw,6px);text-transform:uppercase;line-height:1;
+  animation:fadeDown 0.6s 0.1s ease both;
+}
+.hero-logo span{color:var(--txt3);font-weight:400}
+/* touch tap feedback */
+@media(hover:none){
+  .btn-hero.pri:active{background:var(--amber2)}
+  .btn-hero.sec:active{border-color:var(--amber);color:var(--amber)}
+  .feat-card:active{background:var(--bg2)}
+  .model-card:active{border-color:var(--amber)}
+}
+
+.hero-sub{
+  font-family:var(--sans);font-size:clamp(13px,2vw,16px);
+  color:var(--txt2);max-width:560px;line-height:1.7;
+  animation:fadeDown 0.6s 0.2s ease both;
+}
+.hero-sub b{color:var(--txt);font-weight:600}
+.hero-credit{font-family:var(--mono);font-size:11px;color:var(--txt2);letter-spacing:.5px;animation:fadeDown 0.6s 0.25s ease both}
+.hero-credit b{color:var(--amber)}
+
+.hero-actions{
+  display:flex;gap:12px;flex-wrap:wrap;justify-content:center;
+  animation:fadeDown 0.6s 0.3s ease both;
+}
+.btn-hero{
+  height:44px;padding:0 28px;border-radius:2px;font-family:var(--sans);
+  font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;
+  cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  transition:all .2s;border:1px solid transparent;
+}
+.btn-hero.pri{background:var(--amber);color:#0a0c0e;border-color:var(--amber)}
+.btn-hero.pri:hover{background:var(--amber2);transform:translateY(-1px);box-shadow:0 6px 24px rgba(232,160,32,0.3)}
+.btn-hero.sec{background:transparent;color:var(--txt);border-color:var(--border2)}
+.btn-hero.sec:hover{border-color:var(--amber);color:var(--amber);transform:translateY(-1px)}
+@media(max-width:480px){
+  .btn-hero{width:100%;max-width:280px}
+  .hero-actions{flex-direction:column;align-items:center}
+}
+
+.hero-stats{
+  display:flex;gap:0;border:1px solid var(--border);border-radius:3px;overflow:hidden;
+  animation:fadeDown 0.6s 0.4s ease both;
+  flex-wrap:wrap;
+}
+.stat-item{
+  padding:14px 24px;text-align:center;border-right:1px solid var(--border);
+  background:rgba(17,21,24,0.7);backdrop-filter:blur(8px);
+  flex:1 1 auto;min-width:80px;
+}
+.stat-item:last-child{border-right:none}
+.stat-val{font-family:var(--mono);font-size:22px;color:var(--amber);font-weight:700}
+.stat-lbl{font-family:var(--mono);font-size:9px;color:var(--txt2);letter-spacing:1.5px;text-transform:uppercase;margin-top:3px}
+
+.scroll-hint{
+  position:absolute;bottom:32px;left:50%;transform:translateX(-50%);
+  display:flex;flex-direction:column;align-items:center;gap:6px;
+  animation:fadeDown 1s 1s ease both;
+  color:var(--txt2);font-family:var(--mono);font-size:9px;letter-spacing:2px;text-transform:uppercase;
+}
+.scroll-arrow{width:1px;height:32px;background:linear-gradient(to bottom,var(--amber),transparent);animation:scrollpulse 2s infinite}
+@keyframes scrollpulse{0%{transform:scaleY(0);transform-origin:top}50%{transform:scaleY(1);transform-origin:top}51%{transform:scaleY(1);transform-origin:bottom}100%{transform:scaleY(0);transform-origin:bottom}}
+
+@keyframes fadeDown{from{opacity:0;transform:translateY(-16px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── SECTION SHARED ── */
+section{padding:100px 32px}
+.section-inner{max-width:1100px;margin:0 auto}
+@media(max-width:640px){
+  section{padding:64px 20px}
+}
+.sec-label{
+  font-family:var(--mono);font-size:10px;color:var(--amber);
+  letter-spacing:3px;text-transform:uppercase;margin-bottom:12px;
+  display:flex;align-items:center;gap:10px;
+}
+.sec-label::after{content:'';flex:1;height:1px;background:var(--border);max-width:60px}
+.sec-title{
+  font-family:var(--sans);font-weight:800;font-size:clamp(28px,4vw,42px);
+  color:var(--txtbright);line-height:1.15;margin-bottom:16px;
+}
+.sec-desc{
+  font-size:14px;color:var(--txt2);max-width:560px;line-height:1.7;margin-bottom:56px;
+}
+
+/* ── FEATURES ── */
+#features{background:var(--bg)}
+.features-grid{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:1px;background:var(--border);
+  border:1px solid var(--border);
+}
+@media(max-width:700px){.features-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:480px){.features-grid{grid-template-columns:1fr}}
+.feat-card{
+  background:var(--bg1);padding:32px;
+  transition:background .2s;
+  opacity:0;transform:translateY(20px);
+  transition:background .2s,opacity 0.5s ease,transform 0.5s ease;
+}
+.feat-card.visible{opacity:1;transform:translateY(0)}
+.feat-card:hover{background:var(--bg2)}
+.feat-icon{
+  width:40px;height:40px;border-radius:2px;
+  background:var(--amber-dim);border:1px solid rgba(232,160,32,0.25);
+  display:flex;align-items:center;justify-content:center;
+  font-size:18px;margin-bottom:20px;
+}
+.feat-title{
+  font-family:var(--sans);font-weight:700;font-size:15px;
+  color:var(--txtbright);margin-bottom:10px;letter-spacing:.3px;
+}
+.feat-desc{font-size:13px;color:var(--txt2);line-height:1.7}
+.feat-tag{
+  display:inline-flex;margin-top:14px;
+  font-family:var(--mono);font-size:9px;color:var(--teal);
+  background:rgba(56,178,172,0.08);border:1px solid rgba(56,178,172,0.2);
+  padding:2px 8px;border-radius:2px;letter-spacing:1px;
+}
+
+/* ── MODELS ── */
+#models{background:var(--bg1);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.models-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.model-card{
+  background:var(--bg2);border:1px solid var(--border);border-radius:3px;
+  overflow:hidden;transition:border-color .2s,transform .2s;
+  opacity:0;transform:translateY(24px);
+  transition:border-color .2s,transform 0.5s ease,opacity 0.5s ease;
+}
+.model-card.visible{opacity:1;transform:translateY(0)}
+.model-card:hover{border-color:var(--amber);transform:translateY(-2px)}
+.model-preview{
+  height:200px;background:var(--bg);display:flex;align-items:center;
+  justify-content:center;position:relative;overflow:hidden;border-bottom:1px solid var(--border);
+}
+.model-canvas-wrap{width:100%;height:100%}
+.model-preview canvas{display:block}
+.model-info{padding:18px 20px}
+.model-name{
+  font-family:var(--sans);font-weight:700;font-size:14px;
+  color:var(--txtbright);margin-bottom:6px;
+}
+.model-meta{display:flex;gap:12px;flex-wrap:wrap}
+.model-chip{
+  font-family:var(--mono);font-size:9px;color:var(--txt2);
+  background:var(--bg3);border:1px solid var(--border);
+  padding:2px 8px;border-radius:2px;letter-spacing:1px;
+}
+.model-chip b{color:var(--amber)}
+
+/* ── QUICKSTART ── */
+#quickstart{background:var(--bg)}
+.qs-grid{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start}
+@media(max-width:700px){.qs-grid{grid-template-columns:1fr}}
+.qs-steps{display:flex;flex-direction:column;gap:0}
+.qs-step{
+  display:flex;gap:20px;padding:24px 0;border-bottom:1px solid var(--border);
+  opacity:0;transform:translateX(-20px);
+  transition:opacity 0.5s ease,transform 0.5s ease;
+}
+.qs-step.visible{opacity:1;transform:translateX(0)}
+.qs-step:first-child{padding-top:0}
+.qs-step:last-child{border-bottom:none}
+.qs-num{
+  width:32px;height:32px;flex-shrink:0;
+  border:1px solid var(--border2);border-radius:2px;
+  background:var(--bg2);
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:11px;color:var(--amber);font-weight:700;
+}
+.qs-body{}
+.qs-step-title{font-weight:700;font-size:14px;color:var(--txtbright);margin-bottom:6px}
+.qs-step-desc{font-size:13px;color:var(--txt2);line-height:1.6;margin-bottom:10px}
+.code-block{
+  background:var(--bg2);border:1px solid var(--border);border-radius:2px;
+  padding:12px 16px;
+  font-family:var(--mono);font-size:12px;color:var(--txtbright);
+  position:relative;overflow-x:auto;
+}
+.code-block .cmt{color:var(--txt2)}
+.code-block .kw{color:var(--amber)}
+.code-block .str{color:var(--green)}
+.code-line{display:block;line-height:1.7}
+.copy-btn{
+  position:absolute;top:8px;right:8px;
+  background:var(--bg3);border:1px solid var(--border2);border-radius:2px;
+  color:var(--txt2);font-family:var(--mono);font-size:9px;letter-spacing:1px;
+  text-transform:uppercase;padding:3px 8px;cursor:pointer;transition:all .15s;
+}
+.copy-btn:hover{border-color:var(--amber);color:var(--amber)}
+
+.qs-panel{
+  background:var(--bg1);border:1px solid var(--border);border-radius:3px;overflow:hidden;
+  position:sticky;top:72px;
+  opacity:0;transform:translateX(20px);
+  transition:opacity 0.6s ease,transform 0.6s ease;
+}
+@media(max-width:700px){
+  .qs-panel{position:static;transform:none}
+}
+.qs-panel.visible{opacity:1;transform:translateX(0)}
+.qs-panel-hdr{
+  padding:12px 16px;background:var(--bg2);border-bottom:1px solid var(--border);
+  font-family:var(--mono);font-size:10px;color:var(--txt2);letter-spacing:1px;text-transform:uppercase;
+  display:flex;align-items:center;gap:8px;
+}
+.qs-panel-hdr b{color:var(--amber)}
+.file-tree{padding:16px}
+.ftrow{
+  display:flex;align-items:center;gap:8px;
+  font-family:var(--mono);font-size:11px;color:var(--txt3);
+  padding:3px 0;
+}
+.ftrow .fi{font-size:10px;color:var(--txt2)}
+.ftrow .fn{color:var(--txtbright)}
+.ftrow .fn.amber{color:var(--amber)}
+.ftrow .fn.teal{color:var(--teal)}
+.ftrow .fn.blue{color:var(--blue)}
+.ftrow .fc{color:var(--txt2);font-size:10px;margin-left:auto}
+.ftindent{width:16px;flex-shrink:0}
+.ft-sep{height:1px;background:var(--border);margin:10px 0}
+
+/* ── FORMAT / JSON DOCS ── */
+#format{background:var(--bg1);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.format-cols{display:grid;grid-template-columns:1fr 1.4fr;gap:48px;align-items:start}
+@media(max-width:800px){.format-cols{grid-template-columns:1fr}}
+.schema-tree{display:flex;flex-direction:column;gap:4px}
+.schema-node{
+  font-family:var(--mono);font-size:11px;line-height:1.8;
+  opacity:0;transition:opacity 0.4s ease;
+}
+.schema-node.visible{opacity:1}
+.sn-key{color:var(--amber)}
+.sn-type{color:var(--teal);font-size:10px;margin-left:6px}
+.sn-desc{color:var(--txt2);font-size:10px;margin-left:10px}
+.sn-req{color:var(--red);font-size:9px;margin-left:4px}
+.sn-indent{padding-left:20px;border-left:1px solid var(--border);margin-left:6px}
+.schema-section{margin-bottom:8px}
+.json-example{
+  background:var(--bg2);border:1px solid var(--border);border-radius:3px;
+  padding:20px;font-family:var(--mono);font-size:11px;line-height:1.8;
+  overflow-x:auto;position:relative;
+  opacity:0;transform:translateY(16px);
+  transition:opacity 0.6s ease,transform 0.6s ease;
+}
+.json-example.visible{opacity:1;transform:translateY(0)}
+.j-key{color:var(--amber)}
+.j-str{color:var(--green)}
+.j-num{color:var(--blue)}
+.j-bool{color:var(--teal)}
+.j-cmt{color:var(--txt2);font-style:italic}
+.j-br{color:var(--txt)}
+
+/* ── OUTPUTS ── */
+#outputs{background:var(--bg)}
+.outputs-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.out-card{
+  background:var(--bg1);border:1px solid var(--border);border-radius:3px;
+  padding:24px;
+  opacity:0;transform:translateY(16px);
+  transition:opacity 0.5s ease,transform 0.5s ease;
+}
+.out-card.visible{opacity:1;transform:translateY(0)}
+.out-card:hover{border-color:var(--border2)}
+.out-icon{font-size:24px;margin-bottom:14px}
+.out-title{font-weight:700;font-size:13px;color:var(--txtbright);margin-bottom:8px}
+.out-desc{font-size:12px;color:var(--txt2);line-height:1.6;margin-bottom:12px}
+.out-fields{display:flex;flex-direction:column;gap:4px}
+.out-field{
+  font-family:var(--mono);font-size:10px;color:var(--txt3);
+  padding:3px 8px;background:var(--bg2);border-left:2px solid var(--border2);
+}
+.out-field b{color:var(--amber)}
+
+/* ── CTA ── */
+#cta{
+  background:var(--bg1);border-top:1px solid var(--border);
+  text-align:center;padding:100px 32px;
+}
+@media(max-width:640px){#cta{padding:64px 20px}}
+.cta-inner{max-width:600px;margin:0 auto}
+.cta-title{
+  font-family:var(--sans);font-weight:800;font-size:clamp(32px,5vw,52px);
+  color:var(--txtbright);line-height:1.15;margin-bottom:20px;
+}
+.cta-title span{color:var(--amber)}
+.cta-desc{font-size:14px;color:var(--txt2);line-height:1.7;margin-bottom:40px}
+.cta-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+
+/* ── FOOTER ── */
+footer{
+  background:var(--bg);border-top:1px solid var(--border);
+  padding:32px;display:flex;align-items:center;justify-content:space-between;
+  flex-wrap:wrap;gap:16px;
+}
+.footer-logo{font-family:var(--sans);font-weight:800;font-size:13px;color:var(--amber);letter-spacing:3px;text-transform:uppercase}
+.footer-logo span{color:var(--txt2);font-weight:400}
+.footer-links{display:flex;gap:20px}
+.footer-link{font-family:var(--mono);font-size:10px;color:var(--txt2);text-decoration:none;letter-spacing:1px;text-transform:uppercase;transition:color .15s}
+.footer-link:hover{color:var(--amber)}
+.footer-copy{font-family:var(--mono);font-size:10px;color:var(--txt2);letter-spacing:.5px}
+
+/* ── DIVIDERS ── */
+.amber-line{width:48px;height:2px;background:var(--amber);margin-bottom:20px}
+</style>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<nav id="topbar">
+  <a class="logo" href="#">Open<span>MBD</span></a>
+  <div class="tbsep"></div>
+  <a class="nav-link" href="#features">Features</a>
+  <a class="nav-link" href="#quickstart">Quick Start</a>
+  <a class="nav-link" href="#format">JSON Format</a>
+  <div class="tbspc"></div>
+  <a class="tbtn pri" href="https://github.com/GTBiomech/OpenMBD" target="_blank">↓ Download</a>
+  <button id="hamburger" aria-label="Menu" onclick="toggleMenu()">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+<div id="mobile-nav">
+  <a href="#features" onclick="closeMenu()">Features</a>
+  <a href="#models" onclick="closeMenu()">Models</a>
+  <a href="#quickstart" onclick="closeMenu()">Quick Start</a>
+  <a href="#format" onclick="closeMenu()">JSON Format</a>
+  <a href="#outputs" onclick="closeMenu()">Outputs</a>
+  <a href="https://github.com/GTBiomech/OpenMBD" target="_blank" onclick="closeMenu()">↓ Download on GitHub</a>
+</div>
+
+<!-- HERO -->
+<section id="hero">
+  <canvas id="hero-canvas"></canvas>
+  <div class="hero-content">
+    <div class="hero-logo">Open<span>MBD</span></div>
+    <p class="hero-sub">
+      A <b>multibody dynamics simulator</b> for biomechanics research and education.
+    </p>
+    <p class="hero-credit">Developed by <b>Dr Gregory Tierney</b> at Ulster University</p>
+    <div class="hero-actions">
+      <a class="btn-hero pri" href="https://github.com/GTBiomech/OpenMBD" target="_blank">↓ Download on GitHub</a>
+      <a class="btn-hero sec" href="https://doi.org/10.0000/openmbd" target="_blank">→ Read the Paper</a>
+      <a class="btn-hero sec" href="https://ulster.cloud.panopto.eu/Panopto/Pages/Viewer.aspx?id=b6e8a0ca-0f64-4695-99da-b40c0081527b" target="_blank">→ Video Tutorial</a>
+      <a class="btn-hero sec" href="#quickstart">→ Quick Start</a>
+    </div>
+
+  </div>
+  <div class="scroll-hint">
+    <span>Scroll</span>
+    <div class="scroll-arrow"></div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="section-inner">
+    <div class="sec-label">Capabilities</div>
+    <h2 class="sec-title">What OpenMBD can do</h2>
+    <p class="sec-desc">A general-purpose rigid body simulator designed for biomechanics research, sports science, and mechanical systems analysis.</p>
+    <div class="features-grid">
+      <div class="feat-card">
+        <div class="feat-icon">⚙</div>
+        <div class="feat-title">Constrained Multibody Dynamics</div>
+        <p class="feat-desc">Full articulated rigid body simulation with revolute, spherical, and free joints.</p>
+        <span class="feat-tag">PHYSICS ENGINE</span>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">◎</div>
+        <div class="feat-title">Ellipsoid Contact Model</div>
+        <p class="feat-desc">Bodies are represented as collections of ellipsoids. Penalty-based contact forces with configurable stiffness curves handle contact and collisions without discontinuities.</p>
+        <span class="feat-tag">CONTACT</span>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">🦴</div>
+        <div class="feat-title">Physiological Joint Limits</div>
+        <p class="feat-desc">AAOS-sourced range-of-motion constraints for hips, knees, ankles, shoulders, elbows, wrists, and spine.</p>
+        <span class="feat-tag">BIOMECHANICS</span>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">⬡</div>
+        <div class="feat-title">Visual Model Editor</div>
+        <p class="feat-desc">A standalone HTML5 model editor lets you inspect and modify body geometry, joint transforms, inertia, and contact force curves without running Python.</p>
+        <span class="feat-tag">TOOLING</span>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">📊</div>
+        <div class="feat-title">Rich Data Export</div>
+        <p class="feat-desc">Automatic CSV export of kinematics, contact force history, and a plain-text simulation summary after every run.</p>
+        <span class="feat-tag">ANALYSIS</span>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon">🎬</div>
+        <div class="feat-title">GIF Animation Export</div>
+        <p class="feat-desc">Every simulation automatically captures frame-by-frame renders and stitches them into a GIF on completion.</p>
+        <span class="feat-tag">OUTPUT</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+
+<!-- QUICKSTART -->
+<section id="quickstart">
+  <div class="section-inner">
+    <div class="sec-label">Getting Started</div>
+    <h2 class="sec-title">Up and running in minutes</h2>
+    <p class="sec-desc">OpenMBD runs on Python 3.8+ with standard scientific libraries. No compilation, no build system.</p>
+    <div class="qs-grid">
+      <div class="qs-steps">
+        <div class="qs-step">
+          <div class="qs-num">01</div>
+          <div class="qs-body">
+            <div class="qs-step-title">Clone the repository</div>
+            <p class="qs-step-desc">Download the full project from GitHub including all model files and the HTML model editor.</p>
+            <div class="code-block">
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+              <span class="code-line"><span class="kw">git</span> clone https://github.com/GTBiomech/OpenMBD</span>
+              <span class="code-line"><span class="kw">cd</span> openmbd</span>
+            </div>
+          </div>
+        </div>
+        <div class="qs-step">
+          <div class="qs-num">02</div>
+          <div class="qs-body">
+            <div class="qs-step-title">Install dependencies</div>
+            <p class="qs-step-desc">OpenMBD has exactly three third-party dependencies. <b>NumPy</b> is used for physics, matrix, and quaternion math. <b>Matplotlib</b> drives the 3D viewport, live rendering, and the analysis tab plots. <b>Pillow</b> creates GIF export after each run.</p>
+            <div class="code-block">
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+              <span class="code-line"><span class="kw">pip</span> install numpy matplotlib pillow</span>
+            </div>
+          </div>
+        </div>
+        <div class="qs-step">
+          <div class="qs-num">03</div>
+          <div class="qs-body">
+            <div class="qs-step-title">Launch the simulator</div>
+            <p class="qs-step-desc">Run the main entry point. The GUI opens with the Setup tab where you choose a model, set initial conditions, and configure physics parameters.</p>
+            <div class="code-block">
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+              <span class="code-line"><span class="kw">python</span> openmbd_simulator.py</span>
+            </div>
+          </div>
+        </div>
+        <div class="qs-step">
+          <div class="qs-num">04</div>
+          <div class="qs-body">
+            <div class="qs-step-title">Run a simulation</div>
+            <p class="qs-step-desc">Select a model file (e.g. <code>openmbd_male.json</code>), set an initial position and velocity, then click <b>Finalize</b> → <b>Run</b>. Results auto-export as CSV and GIF.</p>
+          </div>
+        </div>
+        <div class="qs-step">
+          <div class="qs-num">05</div>
+          <div class="qs-body">
+            <div class="qs-step-title">Explore the Model Editor</div>
+            <p class="qs-step-desc">Open <code>openmbd_model_editor.html</code> directly in your browser. No Python needed — edit body geometry, joint transforms, and contact force curves, then export a new JSON.</p>
+            <div class="code-block">
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+              <span class="code-line"><span class="cmt"># Or just double-click openmbd_model_editor.html</span></span>
+              <span class="code-line"><span class="kw">open</span> openmbd_model_editor.html</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="qs-panel">
+        <div class="qs-panel-hdr">📁 Project structure — <b>openmbd/</b></div>
+        <div class="file-tree">
+          <div class="ftrow"><span class="fi">▶</span><span class="fn amber">openmbd_simulator.py</span><span class="fc">entry point</span></div>
+          <div class="ft-sep"></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn teal">physics_engine.py</span><span class="fc">core integrator</span></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn teal">physics_rigid_body.py</span><span class="fc">body state</span></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn teal">physics_constraints.py</span><span class="fc">joint constraints</span></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn teal">physics_joint_limits.py</span><span class="fc">ROM limits</span></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn teal">physics_utils.py</span><span class="fc">quaternion math</span></div>
+          <div class="ft-sep"></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn blue">models_parser.py</span><span class="fc">JSON → engine</span></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn blue">models_multibody.py</span><span class="fc">kinematics</span></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn blue">models_config.py</span><span class="fc">sim config</span></div>
+          <div class="ft-sep"></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn">geometry_ellipsoid.py</span></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn">geometry_mesh_generator.py</span></div>
+          <div class="ft-sep"></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn">ui_main_window.py</span></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn">ui_setup_tab.py</span></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn">ui_run_tab.py</span></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn">ui_analysis_tab.py</span></div>
+          <div class="ftrow"><span class="fi">◈</span><span class="fn">ui_controls.py</span></div>
+          <div class="ft-sep"></div>
+          <div class="ftrow"><span class="fi">⬡</span><span class="fn amber">openmbd_model_editor.html</span><span class="fc">browser tool</span></div>
+          <div class="ft-sep"></div>
+          <div class="ftrow"><span class="fi">▣</span><span class="fn">openmbd_male.json</span></div>
+          <div class="ftrow"><span class="fi">▣</span><span class="fn">openmbd_female.json</span></div>
+          <div class="ftrow"><span class="fi">▣</span><span class="fn">openmbd_car.json</span></div>
+          <div class="ftrow"><span class="fi">▣</span><span class="fn">openmbd_bicycle.json</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- JSON FORMAT -->
+<section id="format">
+  <div class="section-inner">
+    <div class="sec-label">Model Format</div>
+    <h2 class="sec-title">The OpenMBD JSON schema</h2>
+    <p class="sec-desc">Every model is a self-contained JSON file. Bodies, joints, geometry, and contact properties are all defined in one place — readable and version-controllable.</p>
+    <div class="format-cols">
+      <div class="schema-tree">
+        <div class="schema-section">
+          <div class="schema-node"><span class="sn-key">bodies</span><span class="sn-type">object</span><span class="sn-req">required</span></div>
+          <div class="sn-indent">
+            <div class="schema-node"><span class="sn-key">"{body_name}"</span><span class="sn-type">object</span></div>
+            <div class="sn-indent">
+              <div class="schema-node"><span class="sn-key">mass</span><span class="sn-type">number</span><span class="sn-desc">kg</span><span class="sn-req">req</span></div>
+              <div class="schema-node"><span class="sn-key">inertia</span><span class="sn-type">[6]</span><span class="sn-desc">Ixx Iyy Izz Ixy Iyz Ixz kg·m²</span></div>
+              <div class="schema-node"><span class="sn-key">center_of_mass</span><span class="sn-type">[3]</span><span class="sn-desc">local xyz, m</span></div>
+              <div class="schema-node"><span class="sn-key">ellipsoids</span><span class="sn-type">array</span></div>
+              <div class="sn-indent">
+                <div class="schema-node"><span class="sn-key">name</span><span class="sn-type">string</span></div>
+                <div class="schema-node"><span class="sn-key">dimensions</span><span class="sn-type">[3]</span><span class="sn-desc">semi-axes a b c, m</span></div>
+                <div class="schema-node"><span class="sn-key">local_position</span><span class="sn-type">[3]</span><span class="sn-desc">offset from body origin</span></div>
+                <div class="schema-node"><span class="sn-key">local_orientation</span><span class="sn-type">[4×4]</span><span class="sn-desc">transform matrix</span></div>
+                <div class="schema-node"><span class="sn-key">force_curve</span><span class="sn-type">[[d,F]…]</span><span class="sn-desc">penetration → force (N)</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="ft-sep"></div>
+        <div class="schema-section">
+          <div class="schema-node"><span class="sn-key">joints</span><span class="sn-type">array</span><span class="sn-req">required</span></div>
+          <div class="sn-indent">
+            <div class="schema-node"><span class="sn-key">name</span><span class="sn-type">string</span></div>
+            <div class="schema-node"><span class="sn-key">type</span><span class="sn-type">string</span><span class="sn-desc">"fixed" | "revolute" | "spherical" | "free"</span></div>
+            <div class="schema-node"><span class="sn-key">parent</span><span class="sn-type">string</span><span class="sn-desc">body name or "GROUND"</span></div>
+            <div class="schema-node"><span class="sn-key">child</span><span class="sn-type">string</span><span class="sn-desc">body name</span></div>
+            <div class="schema-node"><span class="sn-key">T1</span><span class="sn-type">[4×4]</span><span class="sn-desc">parent anchor transform</span></div>
+            <div class="schema-node"><span class="sn-key">T2</span><span class="sn-type">[4×4]</span><span class="sn-desc">child anchor transform</span></div>
+            <div class="schema-node"><span class="sn-key">T2_inv</span><span class="sn-type">[4×4]</span><span class="sn-desc">inverse of T2</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="json-example">
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+<pre><span class="j-br">{</span>
+  <span class="j-key">"bodies"</span><span class="j-br">: {</span>
+    <span class="j-key">"pelvis"</span><span class="j-br">: {</span>
+      <span class="j-key">"mass"</span><span class="j-br">:</span> <span class="j-num">11.22</span><span class="j-br">,</span>
+      <span class="j-key">"inertia"</span><span class="j-br">:</span> <span class="j-br">[</span><span class="j-num">0.0955, 0.0594, 0.0914, 0, 0, 0</span><span class="j-br">],</span>
+      <span class="j-key">"center_of_mass"</span><span class="j-br">:</span> <span class="j-br">[</span><span class="j-num">0, 0, 0.006</span><span class="j-br">],</span>
+      <span class="j-key">"ellipsoids"</span><span class="j-br">: [</span>
+        <span class="j-br">{</span>
+          <span class="j-key">"name"</span><span class="j-br">:</span> <span class="j-str">"pelvis_main"</span><span class="j-br">,</span>
+          <span class="j-key">"dimensions"</span><span class="j-br">:</span> <span class="j-br">[</span><span class="j-num">0.14, 0.10, 0.09</span><span class="j-br">],</span>
+          <span class="j-key">"local_position"</span><span class="j-br">:</span> <span class="j-br">[</span><span class="j-num">0, 0, 0</span><span class="j-br">],</span>
+          <span class="j-key">"local_orientation"</span><span class="j-br">:</span> <span class="j-cmt">/* 4×4 matrix */</span><span class="j-br">,</span>
+          <span class="j-key">"force_curve"</span><span class="j-br">:</span>
+            <span class="j-br">[[</span><span class="j-num">0, 0</span><span class="j-br">], [</span><span class="j-num">0.01, 10000</span><span class="j-br">]]</span>
+        <span class="j-br">}</span>
+      <span class="j-br">]</span>
+    <span class="j-br">}</span>
+  <span class="j-br">},</span>
+  <span class="j-key">"joints"</span><span class="j-br">: [</span>
+    <span class="j-br">{</span>
+      <span class="j-key">"name"</span><span class="j-br">:</span> <span class="j-str">"hipL"</span><span class="j-br">,</span>
+      <span class="j-key">"type"</span><span class="j-br">:</span> <span class="j-str">"spherical"</span><span class="j-br">,</span>
+      <span class="j-key">"parent"</span><span class="j-br">:</span> <span class="j-str">"pelvis"</span><span class="j-br">,</span>
+      <span class="j-key">"child"</span><span class="j-br">:</span> <span class="j-str">"thighL"</span><span class="j-br">,</span>
+      <span class="j-key">"T1"</span><span class="j-br">:</span> <span class="j-cmt">/* parent anchor 4×4 */</span><span class="j-br">,</span>
+      <span class="j-key">"T2"</span><span class="j-br">:</span> <span class="j-cmt">/* child anchor 4×4 */</span><span class="j-br">,</span>
+      <span class="j-key">"T2_inv"</span><span class="j-br">:</span> <span class="j-cmt">/* inverse of T2 */</span>
+    <span class="j-br">}</span>
+  <span class="j-br">]</span>
+<span class="j-br">}</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- OUTPUTS -->
+<section id="outputs">
+  <div class="section-inner">
+    <div class="sec-label">Outputs</div>
+    <h2 class="sec-title">What you get after every run</h2>
+    <p class="sec-desc">OpenMBD auto-exports three files the moment a simulation completes. Everything is timestamped so runs never overwrite each other.</p>
+    <div class="outputs-grid">
+      <div class="out-card">
+        <div class="out-icon">📈</div>
+        <div class="out-title">Output CSV</div>
+        <p class="out-desc">Full time-series state for every rigid body in the model, sampled at the recording interval.</p>
+        <div class="out-fields">
+          <div class="out-field"><b>Time</b></div>
+          <div class="out-field"><b>PosX / PosY / PosZ</b> — world position</div>
+          <div class="out-field"><b>QuatW/X/Y/Z</b> — orientation</div>
+          <div class="out-field"><b>VelX/Y/Z</b> — linear velocity</div>
+          <div class="out-field"><b>AngVelX/Y/Z</b> — angular velocity</div>
+          <div class="out-field"><b>AccX/Y/Z</b> — linear acceleration</div>
+          <div class="out-field"><b>AngAccX/Y/Z</b> — angular acceleration</div>
+          <div class="out-field"><b>ForceX/Y/Z</b> — accumulated force</div>
+          <div class="out-field"><b>TorqueX/Y/Z</b> — accumulated torque</div>
+        </div>
+      </div>
+
+      <div class="out-card">
+        <div class="out-icon">📋</div>
+        <div class="out-title">Summary Text File</div>
+        <p class="out-desc">Human-readable run report with all simulation parameters and statistics.</p>
+        <div class="out-fields">
+          <div class="out-field"><b>Duration</b> — total sim time (s)</div>
+          <div class="out-field"><b>Time step dt</b></div>
+          <div class="out-field"><b>Friction coefficient</b></div>
+          <div class="out-field"><b>Contact damping</b></div>
+          <div class="out-field"><b>Total contacts recorded</b></div>
+          <div class="out-field"><b>Joint constraints</b></div>
+          <div class="out-field"><b>Model paths &amp; ICs</b></div>
+        </div>
+      </div>
+      <div class="out-card">
+        <div class="out-icon">🎬</div>
+        <div class="out-title">Animated GIF</div>
+        <p class="out-desc">Frame-by-frame capture of the 3D viewport stitched into a shareable animation. Generated automatically with Pillow — no extra steps needed.</p>
+        <div class="out-fields">
+          <div class="out-field"><b>RGBA capture</b> — direct from renderer</div>
+          <div class="out-field"><b>Loop</b> — infinite by default</div>
+          <div class="out-field"><b>Timestamped filename</b></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section id="cta">
+  <div class="cta-inner">
+    <div class="amber-line" style="margin:0 auto 20px"></div>
+    <h2 class="cta-title">Start simulating<br><span>today</span></h2>
+    <p class="cta-desc">OpenMBD is free, open source, and runs anywhere Python runs.</p>
+    <div class="cta-actions">
+      <a class="btn-hero pri" href="https://github.com/GTBiomech/OpenMBD" target="_blank">↓ Get on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-logo">Open<span>MBD</span></div>
+</footer>
+
+<script>
+// ── HAMBURGER MENU ────────────────────────────────────────────────────────────
+function toggleMenu(){
+  document.getElementById('mobile-nav').classList.toggle('open');
+}
+function closeMenu(){
+  document.getElementById('mobile-nav').classList.remove('open');
+}
+// Close drawer when user scrolls
+window.addEventListener('scroll', closeMenu, {passive:true});
+
+// ── HERO PARTICLE CANVAS ──────────────────────────────────────────────────────
+(function(){
+  const c = document.getElementById('hero-canvas');
+  const ctx = c.getContext('2d');
+  let W, H, nodes = [], edges = [];
+  const AMBER = 'rgba(232,160,32,';
+  const TEAL  = 'rgba(56,178,172,';
+
+  function resize(){
+    W = c.width  = window.innerWidth;
+    H = c.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Build a skeleton-like connected graph
+  function init(){
+    nodes = [];
+    edges = [];
+    // Trunk
+    const cx = W*0.5, cy = H*0.5;
+    const scale = Math.min(W,H)*0.22;
+
+    const pts = [
+      [0, -1.0],   // head
+      [0, -0.55],  // neck
+      [0, -0.1],   // chest
+      [0,  0.35],  // pelvis
+      [-0.35, -0.55], // L shoulder
+      [ 0.35, -0.55], // R shoulder
+      [-0.35,  0.1],  // L elbow
+      [ 0.35,  0.1],  // R elbow
+      [-0.35,  0.5],  // L hand
+      [ 0.35,  0.5],  // R hand
+      [-0.2,   0.65], // L hip
+      [ 0.2,   0.65], // R hip
+      [-0.2,   1.1],  // L knee
+      [ 0.2,   1.1],  // R knee
+      [-0.2,   1.55], // L foot
+      [ 0.2,   1.55], // R foot
+    ];
+
+    pts.forEach(([px,py]) => {
+      nodes.push({
+        x: cx + px*scale + (Math.random()-0.5)*30,
+        y: cy + py*scale*0.7 + (Math.random()-0.5)*20,
+        vx:(Math.random()-0.5)*0.15,
+        vy:(Math.random()-0.5)*0.15,
+        r: 2.5 + Math.random()*1.5,
+        phase: Math.random()*Math.PI*2
+      });
+    });
+
+    const pairs = [
+      [0,1],[1,2],[2,3],[2,4],[2,5],[4,6],[5,7],[6,8],[7,9],
+      [3,10],[3,11],[10,12],[11,13],[12,14],[13,15]
+    ];
+    edges = pairs;
+
+    // Add some extra floating nodes
+    for(let i=0;i<30;i++){
+      nodes.push({
+        x:Math.random()*W, y:Math.random()*H,
+        vx:(Math.random()-0.5)*0.3,
+        vy:(Math.random()-0.5)*0.3,
+        r:1+Math.random()*1.5,
+        phase:Math.random()*Math.PI*2
+      });
+    }
+  }
+  init();
+  window.addEventListener('resize',init);
+
+  let t = 0;
+  function frame(){
+    ctx.clearRect(0,0,W,H);
+    t += 0.01;
+
+    // draw edges
+    edges.forEach(([a,b])=>{
+      const na = nodes[a], nb = nodes[b];
+      const dist = Math.hypot(na.x-nb.x, na.y-nb.y);
+      const alpha = Math.max(0, 1 - dist/300);
+      ctx.beginPath();
+      ctx.moveTo(na.x, na.y);
+      ctx.lineTo(nb.x, nb.y);
+      ctx.strokeStyle = AMBER + (alpha*0.4) + ')';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+
+    // draw proximity edges among floaters
+    const floaters = nodes.slice(16);
+    for(let i=0;i<floaters.length;i++){
+      for(let j=i+1;j<floaters.length;j++){
+        const d = Math.hypot(floaters[i].x-floaters[j].x, floaters[i].y-floaters[j].y);
+        if(d < 120){
+          ctx.beginPath();
+          ctx.moveTo(floaters[i].x, floaters[i].y);
+          ctx.lineTo(floaters[j].x, floaters[j].y);
+          ctx.strokeStyle = TEAL + (0.08*(1-d/120)) + ')';
+          ctx.lineWidth = 0.5;
+          ctx.stroke();
+        }
+      }
+    }
+
+    // draw nodes
+    nodes.forEach((n,i)=>{
+      const breathe = Math.sin(t*1.5 + n.phase)*0.3 + 1;
+      const color = i < 16 ? AMBER : TEAL;
+      const alpha = i < 16 ? 0.8 : 0.35;
+
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r*breathe, 0, Math.PI*2);
+      ctx.fillStyle = color + alpha + ')';
+      ctx.fill();
+
+      if(i<16){
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, n.r*breathe*2.5, 0, Math.PI*2);
+        ctx.fillStyle = AMBER + '0.04)';
+        ctx.fill();
+      }
+
+      // gentle drift
+      n.x += n.vx;
+      n.y += n.vy;
+      if(n.x < -50) n.x = W+50;
+      if(n.x > W+50) n.x = -50;
+      if(n.y < -50) n.y = H+50;
+      if(n.y > H+50) n.y = -50;
+    });
+
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
+
+// ── SCROLL REVEAL ─────────────────────────────────────────────────────────────
+const revealObserver = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if(e.isIntersecting){
+      e.target.classList.add('visible');
+    }
+  });
+}, { threshold: 0.12 });
+
+document.querySelectorAll(
+  '.feat-card,.model-card,.qs-step,.qs-panel,.schema-node,.json-example,.out-card'
+).forEach(el => revealObserver.observe(el));
+
+// Stagger children
+document.querySelectorAll('.features-grid,.models-grid,.outputs-grid').forEach(grid => {
+  Array.from(grid.children).forEach((card, i) => {
+    card.style.transitionDelay = (i * 0.08) + 's';
+  });
+});
+
+// ── COPY BUTTON ───────────────────────────────────────────────────────────────
+function copyCode(btn) {
+  const block = btn.closest('.code-block, .json-example');
+  const clone = block.cloneNode(true);
+  clone.querySelectorAll('.copy-btn').forEach(b => b.remove());
+  const text = clone.innerText.trim();
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy', 1800);
+  });
+}
+
+// ── SMOOTH ACTIVE NAV ─────────────────────────────────────────────────────────
+const sections = document.querySelectorAll('section[id]');
+const navLinks = document.querySelectorAll('.nav-link');
+const navObserver = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if(e.isIntersecting){
+      navLinks.forEach(l => l.style.color = '');
+      const active = document.querySelector(`.nav-link[href="#${e.target.id}"]`);
+      if(active) active.style.color = 'var(--amber)';
+    }
+  });
+}, { rootMargin: '-40% 0px -40% 0px' });
+sections.forEach(s => navObserver.observe(s));
+</script>
+</body>
+</html>
