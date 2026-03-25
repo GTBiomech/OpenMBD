@@ -414,8 +414,14 @@ section{padding:100px 32px}
 footer{
   background:var(--bg);border-top:1px solid var(--border);
   padding:32px;display:flex;align-items:center;justify-content:space-between;
-  flex-wrap:wrap;gap:16px;
+  flex-wrap:wrap;gap:16px;flex-direction:column;text-align:center;
 }
+.footer-donate{
+  font-family:var(--mono);font-size:11px;color:var(--txt2);letter-spacing:.5px;line-height:1.7;
+  display:block;text-align:center;
+}
+.footer-donate a{color:var(--amber);text-decoration:underline;transition:color .15s}
+.footer-donate a:hover{color:var(--amber2)}
 .footer-logo{font-family:var(--sans);font-weight:800;font-size:13px;color:var(--amber);letter-spacing:3px;text-transform:uppercase}
 .footer-logo span{color:var(--txt2);font-weight:400}
 .footer-links{display:flex;gap:20px}
@@ -437,6 +443,7 @@ footer{
   <a class="nav-link" href="#quickstart">Quick Start</a>
   <a class="nav-link" href="#format">JSON Format</a>
   <div class="tbspc"></div>
+  <a class="tbtn" href="https://help.unicef.org/en/donate-to-children" target="_blank"><svg width="14" height="9" viewBox="0 0 18 12" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;border-radius:1px;vertical-align:middle"><rect width="18" height="4" y="0" fill="#000"/><rect width="18" height="4" y="4" fill="#fff"/><rect width="18" height="4" y="8" fill="#009736"/><polygon points="0,0 6,6 0,12" fill="#CE1126"/></svg> DONATE</a>
   <a class="tbtn pri" href="https://github.com/GTBiomech/OpenMBD" target="_blank">↓ Download</a>
   <button id="hamburger" aria-label="Menu" onclick="toggleMenu()">
     <span></span><span></span><span></span>
@@ -449,6 +456,7 @@ footer{
   <a href="#format" onclick="closeMenu()">JSON Format</a>
   <a href="#outputs" onclick="closeMenu()">Outputs</a>
   <a href="https://github.com/GTBiomech/OpenMBD" target="_blank" onclick="closeMenu()">↓ Download on GitHub</a>
+  <a href="https://help.unicef.org/en/donate-to-children" target="_blank" onclick="closeMenu()" style="display:flex;align-items:center;gap:8px"><svg width="18" height="12" viewBox="0 0 18 12" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;border-radius:1px"><rect width="18" height="4" y="0" fill="#000"/><rect width="18" height="4" y="4" fill="#fff"/><rect width="18" height="4" y="8" fill="#009736"/><polygon points="0,0 6,6 0,12" fill="#CE1126"/></svg> Donate to Gaza Appeal</a>
 </div>
 
 <!-- HERO -->
@@ -768,6 +776,7 @@ footer{
 <!-- FOOTER -->
 <footer>
   <div class="footer-logo">Open<span>MBD</span></div>
+  <p class="footer-donate"><svg width="16" height="11" viewBox="0 0 18 12" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;border-radius:1px;vertical-align:middle;margin-right:6px"><rect width="18" height="4" y="0" fill="#000"/><rect width="18" height="4" y="4" fill="#fff"/><rect width="18" height="4" y="8" fill="#009736"/><polygon points="0,0 6,6 0,12" fill="#CE1126"/></svg>If you have found OpenMBD helpful, please consider donating to the <a href="https://help.unicef.org/en/donate-to-children" target="_blank">Gaza Appeal via UNICEF</a>.</p>
 </footer>
 
 <script>
