@@ -1,6 +1,6 @@
 # physics_engine.py  
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.0 
+# Version: 1.1 
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import numpy as np
@@ -369,15 +369,46 @@ class PhysicsEngine:
                     self.state[self.nq+s : self.nq+s+3] = [float(v) for v in vel_rad[:3]]
                     # qdot[s+3] = 0 (quaternion norm constraint slot)
                 elif dof == 1:
-                    n = min(dof, len(ang_deg))
-                    self.state[s:s+n] = np.radians(ang_deg[:n])
-                    # Per-joint angular velocity (rad/s)
+                    # Revolute joint: the single DOF is the rotation angle
+                    # about the joint axis.  The UI supplies ang_deg as a
+                    # three-element ZYX Euler vector; we must project it onto
+                    # the actual joint axis stored in joint_axis_local.
+                    #
+                    # Find the body index that owns this joint so we can look
+                    # up the pre-computed child-frame axis.
+                    angle_rad = 0.0
+                    body_found = False
+                    for k_b, body_k in enumerate(self.bodies):
+                        if body_k.model_idx != model_idx:
+                            continue
+                        vis_k = body_k.name.split('_', 1)[1]
+                        vis_obj_k = self.models[model_idx].bodies.get(vis_k)
+                        if (vis_obj_k is not None and
+                                vis_obj_k.joint_name_to_parent == jname):
+                            ax = self.joint_axis_local[k_b]
+                            if ax is not None:
+                                # Dominant axis component selects ZYX Euler slot
+                                # Slot 0 = Z-rotation = ang_deg[0]
+                                # Slot 1 = Y-rotation = ang_deg[1]
+                                # Slot 2 = X-rotation = ang_deg[2]
+                                slot = int(np.argmax(np.abs(ax)))
+                                deg_val = (float(ang_deg[slot])
+                                           if slot < len(ang_deg) else 0.0)
+                                angle_rad = np.radians(deg_val)
+                            else:
+                                angle_rad = np.radians(float(ang_deg[0])
+                                                       if len(ang_deg) > 0 else 0.0)
+                            body_found = True
+                            break
+                    if not body_found:
+                        # Fallback: use the first element (Z-rotation)
+                        angle_rad = np.radians(float(ang_deg[0])
+                                               if len(ang_deg) > 0 else 0.0)
+                    self.state[s] = angle_rad
+                    # Per-joint angular velocity (rad/s) — single scalar
                     joint_vels = getattr(config, 'joint_vels', {})
-                    vel_rad = joint_vels.get(jname, [0.0] * dof)
-                    nv = min(dof, len(vel_rad))
-                    self.state[self.nq+s : self.nq+s+nv] = [
-                        float(v) for v in vel_rad[:nv]
-                    ]
+                    vel_list = joint_vels.get(jname, [0.0])
+                    self.state[self.nq + s] = float(vel_list[0]) if vel_list else 0.0
                 else:
                     n = min(dof, len(ang_deg))
                     self.state[s:s+n] = np.radians(ang_deg[:n])
@@ -456,7 +487,29 @@ class PhysicsEngine:
             jt = ji.get('type', 'fixed')
             self.joint_type[i]  = jt
             if jt == 'revolute':
-                self.joint_axis_local[i] = np.array([0, 0, 1])
+                # The revolute joint axis is the Z-column of T1 expressed in
+                # the PARENT body's local frame.  T1 is the 4x4 transform from
+                # the parent body origin to the joint frame; its column 2 (Z)
+                # gives the joint rotation axis in parent-body coordinates.
+                # Storing this in joint_axis_local[i] means the axis is rotated
+                # to world frame at runtime via  ax = body.R @ T1[:3,2],
+                # where body.R is the parent body's rotation – but note that
+                # body here is the *child* body whose index is i, so we need
+                # the *parent* body's R.  To avoid look-up at build time we
+                # store the axis in the CHILD body's local frame by rotating
+                # through T2:  axis_child = T2[:3,:3].T @ T1[:3,2]
+                # (T2 maps child-body frame -> joint frame, so T2^T maps
+                # joint frame -> child-body frame).
+                T1 = ji['T1']
+                T2 = ji['T2']
+                axis_joint_frame = T1[:3, 2]           # joint Z-axis in joint frame
+                axis_child_local = T2[:3, :3].T @ axis_joint_frame  # in child local frame
+                norm = np.linalg.norm(axis_child_local)
+                if norm > 1e-10:
+                    axis_child_local = axis_child_local / norm
+                else:
+                    axis_child_local = np.array([0.0, 0.0, 1.0])
+                self.joint_axis_local[i] = axis_child_local
             key = (body.model_idx, vis_body.joint_name_to_parent)
             if key in self.joint_dof_map:
                 self.joint_start_idx[i], self.joint_dof[i] = self.joint_dof_map[key]
@@ -1124,7 +1177,26 @@ class PhysicsEngine:
                     jstates[midx][jname] = q[idx:idx+3]
                     idx += 3
                 elif jt == 'revolute' and dof == 1:
-                    jstates[midx][jname] = np.array([q[idx], 0.0, 0.0])
+                    # Map the single revolute DOF to the correct ZYX Euler slot
+                    # (Z=slot 0, Y=slot 1, X=slot 2) so that the visual model's
+                    # get_joint_rotation_matrix rotates about the right axis.
+                    euler_angles = np.zeros(3)
+                    # Look up the pre-computed child-frame axis for this joint
+                    axis_slot = 0  # default: Z-rotation
+                    for k_body, body_k in enumerate(self.bodies):
+                        if body_k.model_idx != midx:
+                            continue
+                        vis_k = body_k.name.split('_', 1)[1]
+                        vis_obj_k = self.models[midx].bodies.get(vis_k)
+                        if (vis_obj_k is not None and
+                                vis_obj_k.joint_name_to_parent == jname):
+                            ax = self.joint_axis_local[k_body]
+                            if ax is not None:
+                                # Dominant component: 0->Z, 1->Y, 2->X
+                                axis_slot = int(np.argmax(np.abs(ax)))
+                            break
+                    euler_angles[axis_slot] = q[idx]
+                    jstates[midx][jname] = euler_angles
                     idx += 1
                 else:
                     idx += dof
@@ -1308,6 +1380,8 @@ class PhysicsEngine:
                 a_pj     = (a[pi]
                             + np.cross(alpha[pi], r_pj)
                             + np.cross(omega[pi], np.cross(omega[pi], r_pj)))
+                # alpha_i = alpha_parent + omega_parent × (ax * qdot)
+                #           [Coriolis: axis rotates with parent frame]
                 alpha[i] = alpha[pi] + np.cross(omega[pi], ax * qd_j[0])
                 a[i]     = (a_pj
                             + np.cross(alpha[i], -cj_world)
@@ -1475,14 +1549,50 @@ class PhysicsEngine:
             s, dof = self.joint_dof_map[key]
 
             trq = np.asarray(entry['torque'], dtype=float)
-            n   = min(dof, len(trq))
             # Half-sine envelope: specified magnitude is the peak.
             # scale = sin(π · (t − t_start) / duration)
             # Rises smoothly 0 → peak at mid-pulse → 0, avoiding
             # the integrator transients caused by a rectangular step.
             phase = (t - t_start) / duration if duration > 0.0 else 0.5
             scale = np.sin(np.pi * phase)
-            tau[s:s + n] += trq[:n] * scale
+
+            if dof == 1:
+                # Revolute joint: the user supplies a ZYX torque vector
+                # [τZ, τY, τX].  The generalised force is the scalar projection
+                # of that torque onto the joint axis.  The axis stored in
+                # joint_axis_local[k] is in child-body local frame; we need
+                # it in world frame to dot with the world-frame torque vector.
+                # Find the matching body index to look up the axis.
+                tau_scalar = float(trq[0])   # fallback: Z-component only
+                midx = entry['model_idx']
+                jname = entry['joint_name']
+                for k_b, body_k in enumerate(self.bodies):
+                    if body_k.model_idx != midx:
+                        continue
+                    vis_k = body_k.name.split('_', 1)[1]
+                    vis_obj_k = self.models[midx].bodies.get(vis_k)
+                    if (vis_obj_k is not None and
+                            vis_obj_k.joint_name_to_parent == jname):
+                        ax_local = self.joint_axis_local[k_b]
+                        if ax_local is not None:
+                            ax_world = body_k.R @ ax_local
+                            # Build a ZYX Euler basis from the torque slots
+                            # so the dot product is axis-aligned correctly:
+                            #   trq = [τZ, τY, τX]  →  τ_world = [0,0,τZ] + [0,τY,0] + [τX,0,0]
+                            #   but we just project: τ_gen = ax_world · trq_world
+                            # trq_world assumes the torque is already in world axes:
+                            # trq[0] acts about world Z, trq[1] about world Y, trq[2] about X
+                            trq_world = np.array([
+                                float(trq[2]) if len(trq) > 2 else 0.0,  # X
+                                float(trq[1]) if len(trq) > 1 else 0.0,  # Y
+                                float(trq[0]) if len(trq) > 0 else 0.0,  # Z
+                            ])
+                            tau_scalar = float(np.dot(ax_world, trq_world))
+                        break
+                tau[s] += tau_scalar * scale
+            else:
+                n = min(dof, len(trq))
+                tau[s:s + n] += trq[:n] * scale
 
         return tau
 
