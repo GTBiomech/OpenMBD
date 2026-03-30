@@ -151,6 +151,24 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 /* Axes canvas */
 #axcanvas{position:absolute;bottom:10px;left:10px;width:56px;height:56px;pointer-events:none;opacity:.7}
 
+/* Revolute joint axis UI */
+.rev-axis-banner{background:rgba(56,178,172,0.08);border:1px solid rgba(56,178,172,0.3);border-radius:3px;padding:8px 10px;margin-bottom:8px}
+.rev-axis-title{font-family:var(--mono);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--teal);margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.rev-axis-arrow{display:inline-block;width:14px;height:14px;border-radius:50%;flex-shrink:0;font-size:10px;line-height:14px;text-align:center;font-weight:700}
+.rev-axis-computed{font-family:var(--mono);font-size:11px;color:var(--txtbright);margin-bottom:8px;padding:4px 6px;background:var(--bg3);border-radius:2px;border:1px solid var(--border)}
+.rev-axis-presets{display:flex;gap:4px;margin-bottom:6px}
+.rev-preset{flex:1;padding:5px 0;background:var(--bg3);border:1px solid var(--border2);border-radius:2px;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;text-align:center}
+.rev-preset:hover,.rev-preset.act{border-color:var(--teal);color:var(--teal);background:rgba(56,178,172,0.1)}
+.rev-preset.act-x{border-color:#e05555;color:#e05555;background:rgba(224,85,85,0.1)}
+.rev-preset.act-y{border-color:#55c885;color:#55c885;background:rgba(85,200,133,0.1)}
+.rev-preset.act-z{border-color:#4a90d9;color:#4a90d9;background:rgba(74,144,217,0.1)}
+.rev-custom-row{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:4px;align-items:center}
+.rev-warn{font-family:var(--mono);font-size:9px;color:var(--amber);margin-top:4px;min-height:12px}
+.dof-badge{font-family:var(--mono);font-size:9px;padding:2px 5px;border-radius:8px;margin-left:4px}
+.dof-x{background:rgba(224,85,85,0.18);color:#e05555;border:1px solid rgba(224,85,85,0.3)}
+.dof-y{background:rgba(85,200,133,0.18);color:#55c885;border:1px solid rgba(85,200,133,0.3)}
+.dof-z{background:rgba(74,144,217,0.18);color:#4a90d9;border:1px solid rgba(74,144,217,0.3)}
+
 /* Welcome overlay */
 #welcome{display:none;position:fixed;inset:0;background:rgba(8,10,12,.92);z-index:300;align-items:center;justify-content:center;flex-direction:column;gap:0}
 #welcome.open{display:flex}
@@ -237,6 +255,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
   <div id="vp-hud">
     <div class="hud-chip">LMB Orbit · RMB Pan · Wheel Zoom</div>
     <div class="hud-chip" id="hud-sel"><b>—</b> Nothing selected</div>
+    <div class="hud-chip" id="hud-rev" style="display:none"><span style="color:#e05555">▸</span> = revolute axis</div>
   </div>
   <div id="vp-cambtns">
     <button class="cambtn" onclick="setView('front')" title="Front">F</button>
@@ -968,19 +987,72 @@ function renderJointPanel() {
   const panel = document.getElementById('joint-content');
   if(!sel) { panel.innerHTML='<div id="no-sel"><div class="ns-icon">⚙</div><div>Select a body</div></div>'; return; }
   const jnts = model.joints.filter(j=>j.parent===sel||j.child===sel);
-  if(!jnts.length) { panel.innerHTML='<div id="no-sel"><div class="ns-icon">⚙</div><div>No joints</div></div>'; return; }
-  
+  if(!jnts.length) { panel.innerHTML='<div id="no-sel"><div class="ns-icon">⚙</div><div>No joints for this body</div></div>'; return; }
+
   let h='';
   jnts.forEach(j => {
     const role = j.child===sel?'child':'parent';
     const roleColor = role==='child' ? 'var(--amber)' : 'var(--teal)';
+    const isRev = j.type === 'revolute';
+
+    // Compute derived axis info for revolute joints
+    let axisHtml = '';
+    let dofBadge = '';
+    if(isRev) {
+      const info = computeRevoluteAxisInfo(j);
+      const axCol = info.axisColor;
+      const axLbl = info.axisLabel;
+      dofBadge = `<span class="dof-badge dof-${axLbl.toLowerCase()}" title="DOF axis in parent frame">DOF:${axLbl}</span>`;
+
+      axisHtml = `
+      <div class="rev-axis-banner">
+        <div class="rev-axis-title">
+          <span class="rev-axis-arrow" style="background:${axCol}20;color:${axCol};border:1px solid ${axCol}40">↻</span>
+          Revolute Axis (joint Z-col in parent frame)
+        </div>
+        <div class="rev-axis-computed" title="T1[:3,2] — the joint rotation axis expressed in parent-body local coordinates">
+          <span style="color:#e05555">X</span> ${info.ax[0].toFixed(4)}
+          &nbsp;&nbsp;<span style="color:#55c885">Y</span> ${info.ax[1].toFixed(4)}
+          &nbsp;&nbsp;<span style="color:#4a90d9">Z</span> ${info.ax[2].toFixed(4)}
+          &nbsp;&nbsp;<span style="color:var(--txt2);font-size:9px">≈ ${info.axisLabel}-axis</span>
+        </div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--txt2);margin-bottom:6px">
+          Quick set — axis points along parent-body direction:
+        </div>
+        <div class="rev-axis-presets">
+          <button class="rev-preset ${info.axisLabel==='X'?'act-x':''}" onclick="setRevoluteAxis('${j.name}',[1,0,0])" title="+X axis">+X</button>
+          <button class="rev-preset ${info.axisLabel==='-X'?'act-x':''}" onclick="setRevoluteAxis('${j.name}',[-1,0,0])" title="-X axis">−X</button>
+          <button class="rev-preset ${info.axisLabel==='Y'?'act-y':''}" onclick="setRevoluteAxis('${j.name}',[0,1,0])" title="+Y axis">+Y</button>
+          <button class="rev-preset ${info.axisLabel==='-Y'?'act-y':''}" onclick="setRevoluteAxis('${j.name}',[0,-1,0])" title="-Y axis">−Y</button>
+          <button class="rev-preset ${info.axisLabel==='Z'?'act-z':''}" onclick="setRevoluteAxis('${j.name}',[0,0,1])" title="+Z axis">+Z</button>
+          <button class="rev-preset ${info.axisLabel==='-Z'?'act-z':''}" onclick="setRevoluteAxis('${j.name}',[0,0,-1])" title="-Z axis">−Z</button>
+        </div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--txt2);margin-bottom:4px">Custom axis (parent-body local coords, will be normalised):</div>
+        <div class="rev-custom-row">
+          <input class="v3inp" type="number" step="0.01" id="rax-x-${j.name}" value="${info.ax[0].toFixed(4)}" placeholder="X">
+          <input class="v3inp" type="number" step="0.01" id="rax-y-${j.name}" value="${info.ax[1].toFixed(4)}" placeholder="Y">
+          <input class="v3inp" type="number" step="0.01" id="rax-z-${j.name}" value="${info.ax[2].toFixed(4)}" placeholder="Z">
+          <button class="tbtn" style="height:26px;padding:0 8px;font-size:10px" onclick="applyCustomRevAxis('${j.name}')">Set</button>
+        </div>
+        <div class="rev-warn" id="rev-warn-${j.name}"></div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--txt2);margin-top:4px;padding-top:4px;border-top:1px solid var(--border)">
+          <b style="color:var(--txtbright)">How it works:</b> The axis is encoded as the Z-column of T1.
+          T2/T2_inv rotation are recalculated automatically to keep the joint frame consistent.
+          The engine reads <code style="color:var(--teal)">T1[:3,2]</code> as the joint axis in parent-body space.
+        </div>
+      </div>`;
+    }
+
     h+=`<div class="psec">
       <div class="psec-hdr" onclick="toggleSec(this)">
-        ${j.name} <span style="color:${roleColor};font-size:9px;margin-left:4px">[${role}]</span><span>▾</span>
+        <span style="flex:1">${j.name}</span>
+        <span style="color:${roleColor};font-size:9px;margin-right:4px">[${role}]</span>
+        ${dofBadge}
+        <span style="margin-left:4px">▾</span>
       </div>
       <div class="psec-body">
         <div class="prow"><span class="plbl">type</span>
-          <select class="pselect" onchange="jnt_set('${j.name}','type',this.value)">
+          <select class="pselect" onchange="jnt_set_type('${j.name}',this.value)">
             <option ${j.type==='spherical'?'selected':''}>spherical</option>
             <option ${j.type==='fixed'?'selected':''}>fixed</option>
             <option ${j.type==='revolute'?'selected':''}>revolute</option>
@@ -992,14 +1064,121 @@ function renderJointPanel() {
         <div class="prow"><span class="plbl">child</span>
           <input class="pinput" value="${j.child}" onchange="jnt_set('${j.name}','child',this.value)">
         </div>
-        <div class="v3row" style="margin-top:4px">
-          <span class="v3lbl">T1 trans</span>
+        ${axisHtml}
+        <div class="v3row" style="margin-top:6px">
+          <span class="v3lbl">T1 trans <span class="plbl-unit">m</span></span>
           ${[0,1,2].map(r=>`<input class="v3inp" type="number" step="0.001" value="${j.T1[r][3].toFixed(5)}" onchange="jnt_T1('${j.name}',${r},parseFloat(this.value))">`).join('')}
+        </div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--txt2);margin-top:2px">
+          Joint origin offset from parent CG (X=AP, Y=ML, Z=SI)
         </div>
       </div>
     </div>`;
   });
   panel.innerHTML = h;
+}
+
+// ── Revolute axis helpers ──────────────────────────────────────────────
+
+function computeRevoluteAxisInfo(j) {
+  // The joint rotation axis is the Z-column (col index 2) of T1[:3,:3]
+  const ax = [j.T1[0][2], j.T1[1][2], j.T1[2][2]];
+  const norm = Math.sqrt(ax[0]*ax[0]+ax[1]*ax[1]+ax[2]*ax[2]);
+  if(norm > 1e-10) { ax[0]/=norm; ax[1]/=norm; ax[2]/=norm; }
+
+  // Dominant axis label
+  const abs = ax.map(Math.abs);
+  const maxI = abs.indexOf(Math.max(...abs));
+  const sign = ax[maxI] >= 0 ? '' : '-';
+  const lbl = sign + ['X','Y','Z'][maxI];
+  const colors = ['#e05555','#55c885','#4a90d9'];
+  return { ax, axisLabel: lbl, axisColor: colors[maxI] };
+}
+
+function _buildT1WithAxis(j, newAxis) {
+  // Normalise
+  const n = Math.sqrt(newAxis[0]**2+newAxis[1]**2+newAxis[2]**2);
+  if(n < 1e-10) return false;
+  const z = newAxis.map(v=>v/n);
+
+  // Build an orthonormal frame with z as the Z-column.
+  // Pick a helper vector not parallel to z.
+  const helper = (Math.abs(z[0]) < 0.9) ? [1,0,0] : [0,1,0];
+  // x = z × helper (normalised)
+  let x = [z[1]*helper[2]-z[2]*helper[1], z[2]*helper[0]-z[0]*helper[2], z[0]*helper[1]-z[1]*helper[0]];
+  const xn = Math.sqrt(x[0]**2+x[1]**2+x[2]**2);
+  x = x.map(v=>v/xn);
+  // y = z × x
+  const y = [z[1]*x[2]-z[2]*x[1], z[2]*x[0]-z[0]*x[2], z[0]*x[1]-z[1]*x[0]];
+
+  // Preserve existing translation
+  const tx=j.T1[0][3], ty=j.T1[1][3], tz=j.T1[2][3];
+  j.T1 = [
+    [x[0], y[0], z[0], tx],
+    [x[1], y[1], z[1], ty],
+    [x[2], y[2], z[2], tz],
+    [0,    0,    0,    1  ]
+  ];
+
+  // Rebuild T2/T2_inv as identity rotation (child frame aligned with joint frame)
+  // preserving existing T2 translation
+  const t2tx=j.T2[0][3], t2ty=j.T2[1][3], t2tz=j.T2[2][3];
+  j.T2 = [
+    [1,0,0,t2tx],[0,1,0,t2ty],[0,0,1,t2tz],[0,0,0,1]
+  ];
+  j.T2_inv = [
+    [1,0,0,-t2tx],[0,1,0,-t2ty],[0,0,1,-t2tz],[0,0,0,1]
+  ];
+  return true;
+}
+
+function setRevoluteAxis(jname, axis) {
+  const j = model.joints.find(jj=>jj.name===jname);
+  if(!j) return;
+  pushUndo();
+  _buildT1WithAxis(j, axis);
+  onChanged();
+  renderJointPanel();
+  rebuildRevAxisArrows();
+}
+
+function applyCustomRevAxis(jname) {
+  const j = model.joints.find(jj=>jj.name===jname);
+  if(!j) return;
+  const warn = document.getElementById(`rev-warn-${jname}`);
+  const x = parseFloat(document.getElementById(`rax-x-${jname}`)?.value)||0;
+  const y = parseFloat(document.getElementById(`rax-y-${jname}`)?.value)||0;
+  const z = parseFloat(document.getElementById(`rax-z-${jname}`)?.value)||0;
+  const n = Math.sqrt(x*x+y*y+z*z);
+  if(n < 1e-10) { if(warn) warn.textContent='Axis vector cannot be zero.'; return; }
+  if(warn) warn.textContent='';
+  pushUndo();
+  _buildT1WithAxis(j, [x,y,z]);
+  onChanged();
+  renderJointPanel();
+  rebuildRevAxisArrows();
+}
+
+function jnt_set_type(jname, newType) {
+  const j = model.joints.find(jj=>jj.name===jname);
+  if(!j) return;
+  pushUndo();
+  j.type = newType;
+  // When switching TO revolute, ensure T1 has a valid orthonormal rotation
+  // (identity may already be fine — but if T1 was spherical with a non-standard
+  // frame, the Z-col might not be the intended axis).  Default to +Y axis which
+  // is the most common anatomical revolute axis (flexion/extension).
+  if(newType === 'revolute') {
+    const ax = [j.T1[0][2], j.T1[1][2], j.T1[2][2]];
+    const norm = Math.sqrt(ax[0]**2+ax[1]**2+ax[2]**2);
+    if(norm < 0.5) {
+      // T1 rotation was degenerate — initialise to +Y revolute axis
+      _buildT1WithAxis(j, [0,1,0]);
+    }
+  }
+  onChanged();
+  renderJointPanel();
+  rebuildRevAxisArrows();
 }
 
 function renderContactPanel() {
@@ -1201,22 +1380,52 @@ function openAddModal(mode) {
       <div class="mrow"><label>Mass (kg)</label><input class="minput" id="m-bmass" type="number" step="0.01" value="1.0"></div>
       <div class="mrow"><label>Parent body</label><select class="minput" id="m-bparent">${blist}</select></div>
       <div class="mrow"><label>Joint type</label>
-        <select class="minput" id="m-bjtype"><option>spherical</option><option>fixed</option><option>revolute</option></select>
+        <select class="minput" id="m-bjtype" onchange="modalJointTypeChanged(this.value,'body')">
+          <option>spherical</option><option>fixed</option><option>revolute</option>
+        </select>
       </div>
-      <div class="mrow"><label>T1 offset X Y Z (m)</label>
+      <div id="m-rev-axis-row" style="display:none">
+        <div class="mrow"><label>Revolute axis (parent-body local frame)</label>
+          <select class="minput" id="m-baxis">
+            <option value="0,1,0">+Y — flexion/extension (sagittal, e.g. knee)</option>
+            <option value="1,0,0">+X — anterior-posterior (e.g. wrist radial dev.)</option>
+            <option value="0,0,1">+Z — vertical / axial rotation</option>
+            <option value="0,-1,0">−Y</option>
+            <option value="-1,0,0">−X</option>
+            <option value="0,0,-1">−Z</option>
+          </select>
+        </div>
+      </div>
+      <div class="mrow"><label>T1 offset X Y Z (m) — joint origin from parent CG</label>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
-          <input class="minput" id="m-tx" type="number" step="0.01" value="0" placeholder="X">
-          <input class="minput" id="m-ty" type="number" step="0.01" value="0" placeholder="Y">
-          <input class="minput" id="m-tz" type="number" step="0.01" value="0" placeholder="Z">
+          <input class="minput" id="m-tx" type="number" step="0.01" value="0" placeholder="X (AP)">
+          <input class="minput" id="m-ty" type="number" step="0.01" value="0" placeholder="Y (ML)">
+          <input class="minput" id="m-tz" type="number" step="0.01" value="0" placeholder="Z (SI)">
         </div>
       </div>`;
   } else {
     f.innerHTML=`
       <div class="mrow"><label>Joint name</label><input class="minput" id="m-jname" placeholder="e.g. shoulder_auxJnt"></div>
-      <div class="mrow"><label>Type</label><select class="minput" id="m-jtype2"><option>spherical</option><option>fixed</option><option>revolute</option></select></div>
+      <div class="mrow"><label>Type</label>
+        <select class="minput" id="m-jtype2" onchange="modalJointTypeChanged(this.value,'joint')">
+          <option>spherical</option><option>fixed</option><option>revolute</option>
+        </select>
+      </div>
+      <div id="m-rev-axis-row" style="display:none">
+        <div class="mrow"><label>Revolute axis (parent-body local frame)</label>
+          <select class="minput" id="m-jaxis">
+            <option value="0,1,0">+Y — flexion/extension (sagittal, e.g. knee)</option>
+            <option value="1,0,0">+X — anterior-posterior</option>
+            <option value="0,0,1">+Z — vertical / axial rotation</option>
+            <option value="0,-1,0">−Y</option>
+            <option value="-1,0,0">−X</option>
+            <option value="0,0,-1">−Z</option>
+          </select>
+        </div>
+      </div>
       <div class="mrow"><label>Parent body</label><select class="minput" id="m-jp">${blist}</select></div>
       <div class="mrow"><label>Child body</label><select class="minput" id="m-jc">${blist}</select></div>
-      <div class="mrow"><label>T1 offset X Y Z (m)</label>
+      <div class="mrow"><label>T1 offset X Y Z (m) — joint origin from parent CG</label>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
           <input class="minput" id="m-jtx" type="number" step="0.01" value="0">
           <input class="minput" id="m-jty" type="number" step="0.01" value="0">
@@ -1228,11 +1437,29 @@ function openAddModal(mode) {
   setTimeout(()=>document.querySelector('.minput')?.focus(), 50);
 }
 
+function modalJointTypeChanged(type, mode) {
+  const row = document.getElementById('m-rev-axis-row');
+  if(row) row.style.display = type === 'revolute' ? '' : 'none';
+}
+
 function closeModal() { document.getElementById('modal-bg').classList.remove('open'); modalMode=null; }
 document.getElementById('modal-bg').addEventListener('click', e=>{ if(e.target===document.getElementById('modal-bg')) closeModal(); });
 document.getElementById('scaler-bg').addEventListener('click', e=>{ if(e.target===document.getElementById('scaler-bg')) closeScaler(); });
 
 function confirmModal() {
+  // Helper: build a 4x4 T1 with a given axis as Z-column and a given translation
+  function makeRevT1(axisStr, tx, ty, tz) {
+    const parts = axisStr.split(',').map(Number);
+    const z = parts.length===3 ? parts : [0,1,0];
+    const n = Math.sqrt(z[0]**2+z[1]**2+z[2]**2);
+    if(n>1e-10){z[0]/=n;z[1]/=n;z[2]/=n;}
+    const helper = (Math.abs(z[0])<0.9)?[1,0,0]:[0,1,0];
+    let x=[z[1]*helper[2]-z[2]*helper[1],z[2]*helper[0]-z[0]*helper[2],z[0]*helper[1]-z[1]*helper[0]];
+    const xn=Math.sqrt(x[0]**2+x[1]**2+x[2]**2); x=x.map(v=>v/xn);
+    const y=[z[1]*x[2]-z[2]*x[1],z[2]*x[0]-z[0]*x[2],z[0]*x[1]-z[1]*x[0]];
+    return [[x[0],y[0],z[0],tx],[x[1],y[1],z[1],ty],[x[2],y[2],z[2],tz],[0,0,0,1]];
+  }
+
   if(modalMode==='body') {
     const name = document.getElementById('m-bname').value.trim();
     if(!name || model.bodies[name]) { alert(!name?'Enter a name':'Body already exists'); return; }
@@ -1244,24 +1471,92 @@ function confirmModal() {
     const tz=parseFloat(document.getElementById('m-tz').value)||0;
     pushUndo();
     model.bodies[name] = {mass, inertia:[0.01,0.01,0.01,0,0,0], center_of_mass:[0,0,0], ellipsoids:[]};
-    const T1=[[1,0,0,tx],[0,1,0,ty],[0,0,1,tz],[0,0,0,1]];
+
+    let T1;
+    if(jtype==='revolute') {
+      const axisStr = document.getElementById('m-baxis')?.value || '0,1,0';
+      T1 = makeRevT1(axisStr, tx, ty, tz);
+    } else {
+      T1 = [[1,0,0,tx],[0,1,0,ty],[0,0,1,tz],[0,0,0,1]];
+    }
     model.joints.push({name:`${parent.toLowerCase()}-${name.toLowerCase()}Jnt`, type:jtype, parent, child:name, T1, T2:I4, T2_inv:I4});
     onChanged(); selectBody(name);
   } else {
     const jname = document.getElementById('m-jname').value.trim();
     if(!jname) { alert('Enter a joint name'); return; }
+    const jtype = document.getElementById('m-jtype2').value;
     const tx=parseFloat(document.getElementById('m-jtx').value)||0;
     const ty=parseFloat(document.getElementById('m-jty').value)||0;
     const tz=parseFloat(document.getElementById('m-jtz').value)||0;
     pushUndo();
+    let T1;
+    if(jtype==='revolute') {
+      const axisStr = document.getElementById('m-jaxis')?.value || '0,1,0';
+      T1 = makeRevT1(axisStr, tx, ty, tz);
+    } else {
+      T1 = [[1,0,0,tx],[0,1,0,ty],[0,0,1,tz],[0,0,0,1]];
+    }
     model.joints.push({
-      name:jname, type:document.getElementById('m-jtype2').value,
+      name:jname, type:jtype,
       parent:document.getElementById('m-jp').value, child:document.getElementById('m-jc').value,
-      T1:[[1,0,0,tx],[0,1,0,ty],[0,0,1,tz],[0,0,0,1]], T2:I4, T2_inv:I4
+      T1, T2:I4, T2_inv:I4
     });
     onChanged();
   }
+  rebuildRevAxisArrows();
   closeModal();
+}
+
+// ── 3D revolute axis arrows ────────────────────────────────────────────
+// Stores Three.js arrow helpers keyed by joint name so we can update them.
+let revAxisArrows = {};
+
+function rebuildRevAxisArrows() {
+  // Remove existing arrows
+  Object.values(revAxisArrows).forEach(a => scene.remove(a));
+  revAxisArrows = {};
+  if(!model) return;
+
+  const wpos = computeWorldPos();
+
+  model.joints.forEach(j => {
+    if(j.type !== 'revolute') return;
+    const pPos = wpos[j.parent] || wpos[j.child];
+    const cPos = wpos[j.child];
+    if(!pPos || !cPos) return;
+
+    // Joint world position = parent pos + T1 translation (model→scene coord mapping)
+    const tx=j.T1[0][3], ty=j.T1[1][3], tz=j.T1[2][3];
+    const jPos = new THREE.Vector3(pPos.x+ty, pPos.y+tz, pPos.z+tx);
+
+    // Axis in parent model frame = T1 Z-col: [T1[0][2], T1[1][2], T1[2][2]]
+    const axMX=j.T1[0][2], axMY=j.T1[1][2], axMZ=j.T1[2][2];
+    // Map model (X=AP,Y=ML,Z=SI) → scene (X=ML,Y=SI,Z=AP)
+    const axScene = new THREE.Vector3(axMY, axMZ, axMX);
+    const axLen = axScene.length();
+    if(axLen < 1e-10) return;
+    axScene.normalize();
+
+    // Colour by dominant component in model space
+    const absX=Math.abs(axMX),absY=Math.abs(axMY),absZ=Math.abs(axMZ);
+    const maxA=Math.max(absX,absY,absZ);
+    let col = 0x4a90d9; // Z default
+    if(absY===maxA) col=0x55c885;       // Y (ML)
+    else if(absX===maxA) col=0xe05555;  // X (AP)
+
+    const arrowLen = 0.12;
+    const arrow = new THREE.ArrowHelper(axScene, jPos, arrowLen, col, 0.025, 0.015);
+    // Also draw the negative direction faintly
+    const arrowNeg = new THREE.ArrowHelper(axScene.clone().negate(), jPos, arrowLen*0.5, col, 0.018, 0.012);
+    arrowNeg.line.material.opacity = 0.35;
+    arrowNeg.line.material.transparent = true;
+    arrowNeg.cone.material.opacity = 0.35;
+    arrowNeg.cone.material.transparent = true;
+
+    scene.add(arrow); scene.add(arrowNeg);
+    revAxisArrows[j.name+'+'] = arrow;
+    revAxisArrows[j.name+'-'] = arrowNeg;
+  });
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1322,12 +1617,14 @@ function initModel() {
   renderProps();
   document.getElementById('no-sel').style.display='flex';
   document.getElementById('prop-panels').style.display='none';
+  rebuildRevAxisArrows();
 }
 
 function onChanged() {
   buildScene();
   buildTree();
   updateStatusBar();
+  rebuildRevAxisArrows();
   if(sel) {
     document.getElementById('hud-sel').innerHTML = `<b>${sel}</b> · ${(model.bodies[sel]?.mass||0).toFixed(3)} kg`;
   }
@@ -1337,6 +1634,7 @@ function updateStatusBar() {
   if(!model) return;
   const nb = Object.keys(model.bodies||{}).length;
   const nj = (model.joints||[]).length;
+  const nrev = (model.joints||[]).filter(j=>j.type==='revolute').length;
   const ne = Object.values(model.bodies||{}).reduce((s,b)=>s+(b.ellipsoids||[]).length,0);
   const mass = Object.values(model.bodies||{}).reduce((s,b)=>s+b.mass,0);
   document.getElementById('tb-nb').textContent = nb;
@@ -1345,6 +1643,12 @@ function updateStatusBar() {
   document.getElementById('sb-ells').textContent = `Ellipsoids: ${ne}`;
   const hInfo = computeModelHeight();
   document.getElementById('tb-height').textContent = hInfo ? hInfo.height_cm.toFixed(1) : '?';
+  // Show revolute arrow legend only when revolute joints exist
+  const hudRev = document.getElementById('hud-rev');
+  if(hudRev) hudRev.style.display = nrev > 0 ? '' : 'none';
+  if(hudRev && nrev > 0) {
+    hudRev.innerHTML = `<span style="color:#e05555">■</span><span style="color:#55c885">■</span><span style="color:#4a90d9">■</span> = revolute axis (X/Y/Z) — ${nrev} joint${nrev>1?'s':''}`;
+  }
 }
 
 // ═══════════════════════════════════════════════════════
