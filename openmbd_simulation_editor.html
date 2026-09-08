@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OpenMBD Simulation Editor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne+Mono&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0c0e;--bg1:#111518;--bg2:#181d22;--bg3:#1f262e;--bg4:#28323c;
+  --border:#263040;--border2:#334455;
+  --amber:#e8a020;--amber2:#ffbb44;--amber-dim:rgba(232,160,32,0.12);--amber-glow:rgba(232,160,32,0.06);
+  --teal:#38b2ac;--blue:#4a90d9;--red:#e05555;--green:#55c885;
+  --txt:#b8c8d8;--txt2:#6a8090;--txt3:#8090a0;--txtbright:#e8f0f8;
+  --mono:'Syne Mono',monospace;--sans:'Syne',sans-serif;
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--txt);font-family:var(--sans)}
+
+/* ── LAYOUT — mirrors Tab 1's PanedWindow: narrow controls pane (weight 1) + large 3D preview (weight 3) ── */
+#shell{display:grid;grid-template-rows:44px 1fr 24px;grid-template-columns:360px 1fr;height:100vh}
+#topbar{grid-column:1/-1;background:var(--bg1);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 14px;gap:6px}
+#leftpanel{background:var(--bg1);border-right:1px solid var(--border);overflow-y:auto}
+#viewport{position:relative;background:var(--bg);overflow:hidden}
+#statusbar{grid-column:1/-1;background:var(--bg1);border-top:1px solid var(--border);display:flex;align-items:center;padding:0 14px;gap:20px;font-family:var(--mono);font-size:10px;color:var(--txt2)}
+
+/* ── TOPBAR ─────────────────────────────── */
+.logo{font-family:var(--sans);font-weight:800;font-size:15px;color:var(--amber);letter-spacing:3px;margin-right:4px;text-transform:uppercase}
+.logo span{color:var(--txt2);font-weight:400}
+.tb-title{font-family:var(--mono);font-size:11px;color:var(--txt2);margin-right:8px}
+.tbsep{width:1px;height:22px;background:var(--border2);margin:0 4px}
+.tbtn{height:27px;padding:0 11px;background:var(--bg3);border:1px solid var(--border2);border-radius:2px;color:var(--txt);font-family:var(--sans);font-size:10.5px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all .15s;white-space:nowrap;letter-spacing:.4px}
+.tbtn:hover{background:var(--bg4);border-color:var(--amber);color:var(--amber)}
+.tbtn.pri{background:var(--amber);color:#0a0c0e;border-color:var(--amber)}
+.tbtn.pri:hover{background:var(--amber2)}
+.tbtn:disabled{opacity:.35;cursor:not-allowed}
+.tbtn:disabled:hover{background:var(--bg3);border-color:var(--border2);color:var(--txt)}
+.tbtn.sm{height:24px;padding:0 8px;font-size:10px}
+.tbspc{flex:1}
+.tb-stat{font-family:var(--mono);font-size:10.5px;color:var(--txt2)}
+.tb-stat b{color:var(--amber);font-weight:400}
+
+/* ── LEFT PANEL — Tab 1 replica ──────────── */
+.lf{border-bottom:1px solid var(--border)}
+.lf-hdr{padding:7px 12px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--amber);background:var(--bg2);border-bottom:1px solid var(--border)}
+.lf-body{padding:10px 12px}
+.lf-grow{flex:1}
+
+.field-label{display:block;font-family:var(--mono);font-size:10px;color:var(--txt2);margin-bottom:3px}
+.field-label.mt{margin-top:10px}
+.pinput{background:var(--bg3);border:1px solid var(--border2);border-radius:2px;color:var(--txtbright);font-family:var(--mono);font-size:11px;padding:5px 7px;width:100%;outline:none;transition:border-color .15s}
+.pinput:focus{border-color:var(--amber)}
+.pinput.sm{width:64px;flex:none}
+.pselect{background:var(--bg3);border:1px solid var(--border2);border-radius:2px;color:var(--txtbright);font-family:var(--mono);font-size:11px;padding:6px 7px;width:100%;outline:none;cursor:pointer}
+.pselect:disabled{opacity:.5;cursor:not-allowed}
+
+.dtdur-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin-bottom:8px}
+.dtdur-row .field-label{margin:0;white-space:nowrap}
+.dtdur-row .pinput{width:64px}
+.inline-row{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.inline-row .field-label{margin:0;white-space:nowrap;flex-shrink:0}
+.inline-row .pinput{flex:1}
+
+.radio-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.radio-pill{display:flex;align-items:center;gap:5px;padding:5px 10px;border:1px solid var(--border2);border-radius:2px;background:var(--bg3);cursor:pointer;font-family:var(--sans);font-size:10.5px;font-weight:700;color:var(--txt);transition:all .15s}
+.radio-pill:hover{border-color:var(--amber)}
+.radio-pill.sel{border-color:var(--amber);color:var(--amber);background:var(--amber-dim)}
+.radio-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.radio-pill .unloaded-tag{font-family:var(--mono);font-size:8px;color:var(--txt2);text-transform:uppercase}
+
+.btn-row{display:flex;gap:6px;margin-bottom:8px}
+.btn-row .tbtn{flex:1;justify-content:center}
+.path-row{display:flex;align-items:center;gap:6px}
+.path-row .pinput{flex:1}
+
+.section-label{font-family:var(--mono);font-size:9.5px;color:var(--txt2);letter-spacing:.5px;margin:2px 0 6px}
+.sep{border:none;border-top:1px solid var(--border);margin:10px 0 8px}
+
+/* ── AXIS ROWS (angle / velocity / torque sliders — replicate AngleControlFrame) ── */
+.axis-row{display:grid;grid-template-columns:58px 60px 1fr 62px;gap:6px;align-items:center;margin-bottom:6px}
+.axis-lbl{font-family:var(--mono);font-size:9.5px;color:var(--txt2)}
+.axis-num{background:var(--bg3);border:1px solid var(--border2);border-radius:2px;color:var(--txtbright);font-family:var(--mono);font-size:10.5px;padding:4px 5px;width:100%;outline:none;text-align:right}
+.axis-num:focus{border-color:var(--amber)}
+.axis-slider{width:100%;accent-color:var(--amber);cursor:pointer}
+.axis-val{font-family:var(--mono);font-size:9.5px;color:var(--txtbright);text-align:right;white-space:nowrap}
+.axis-row.disabled{opacity:.35;pointer-events:none}
+.timing-row{display:flex;align-items:center;gap:6px;margin-top:4px;flex-wrap:wrap}
+.timing-row .field-label{margin:0}
+
+.no-joint-msg{font-family:var(--mono);font-size:10px;color:var(--txt2);padding:8px 0;line-height:1.6}
+.no-joint-msg b{color:var(--amber);font-weight:400}
+
+/* ── VIEWPORT (3D preview) ───────────────── */
+#viewport canvas{display:block}
+#vp-hud{position:absolute;top:10px;left:10px;display:flex;flex-direction:column;gap:4px;pointer-events:none;z-index:2}
+.hud-chip{background:rgba(10,12,14,.85);border:1px solid var(--border2);border-radius:2px;padding:3px 8px;font-family:var(--mono);font-size:9px;color:var(--txt2);backdrop-filter:blur(4px)}
+.hud-chip b{color:var(--amber)}
+.hud-chip .swatch{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px}
+#vp-cambtns{position:absolute;bottom:10px;right:10px;display:flex;gap:4px;z-index:2}
+.cambtn{width:26px;height:26px;background:rgba(10,12,14,.85);border:1px solid var(--border2);border-radius:2px;color:var(--txt3);font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;backdrop-filter:blur(4px)}
+.cambtn:hover{border-color:var(--amber);color:var(--amber)}
+#axcanvas{position:absolute;bottom:10px;left:10px;width:52px;height:52px;pointer-events:none;opacity:.7;z-index:2}
+#vp-empty{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--txt2);font-family:var(--mono);font-size:11px;text-align:center;pointer-events:none}
+#vp-empty.show{display:flex}
+.vp-empty-icon{font-size:26px;opacity:.25}
+
+/* ── MODAL (JSON preview) ────────────────── */
+#json-modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center}
+#json-modal-bg.open{display:flex}
+#json-modal{background:var(--bg2);border:1px solid var(--border2);border-radius:4px;padding:18px;width:min(720px,90vw);max-height:82vh;display:flex;flex-direction:column}
+#json-modal h3{font-size:13px;font-weight:700;color:var(--txtbright);margin-bottom:10px;letter-spacing:.5px;display:flex;justify-content:space-between;align-items:center}
+#json-preview-content{flex:1;overflow:auto;background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:12px;font-family:var(--mono);font-size:10px;color:var(--txt);white-space:pre-wrap;word-break:break-word}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+.ph-btn{background:none;border:none;color:var(--txt2);font-size:15px;cursor:pointer;padding:0 2px;transition:color .15s;line-height:1}
+.ph-btn:hover{color:var(--amber)}
+
+/* ── WELCOME OVERLAY ─────────────────────── */
+#welcome{display:none;position:fixed;inset:0;background:rgba(8,10,12,.92);z-index:300;align-items:center;justify-content:center;flex-direction:column}
+#welcome.open{display:flex}
+.wc{background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:36px 44px;min-width:380px;max-width:480px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:16px}
+.wc-logo{font-family:var(--sans);font-weight:800;font-size:22px;color:var(--amber);letter-spacing:4px;text-transform:uppercase}
+.wc-logo span{color:var(--txt2);font-weight:400}
+.wc-sub2{font-family:var(--mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--teal)}
+.wc-sub{font-size:12px;color:var(--txt2);line-height:1.6;max-width:340px}
+.wc-btns{display:flex;gap:10px;width:100%;margin-top:6px}
+.wc-btn{flex:1;padding:11px 0;border-radius:3px;font-family:var(--sans);font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;border:1px solid var(--border2);background:var(--bg3);color:var(--txt);transition:all .15s}
+.wc-btn:hover{border-color:var(--amber);color:var(--amber);background:var(--amber-dim)}
+.wc-btn.pri{background:var(--amber);color:#0a0c0e;border-color:var(--amber)}
+.wc-btn.pri:hover{background:var(--amber2)}
+.wc-sep{width:100%;border:none;border-top:1px solid var(--border);margin:2px 0}
+
+/* ── Scrollbars ──────────────────────────── */
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:2px}
+::-webkit-scrollbar-thumb:hover{background:var(--border2)}
+</style>
+</head>
+<body>
+<div id="shell">
+
+  <!-- TOPBAR -->
+  <div id="topbar">
+    <div class="logo">Open<span>MBD</span></div>
+    <div class="tb-title">Simulation Editor</div>
+    <div class="tbsep"></div>
+    <button class="tbtn" onclick="openJsonPreview()">{ } Preview JSON</button>
+    <div class="tbspc"></div>
+    <div class="tb-stat">Models: <b id="sb-models">—</b></div>
+    <div class="tb-stat">Duration: <b id="sb-dur">—</b> s</div>
+    <div class="tb-stat">Sim Dt: <b id="sb-dt">—</b> s</div>
+  </div>
+
+  <!-- LEFT: Tab 1 replica (Simulation Parameters / Model Configuration / Joint Configuration / Save+Load) -->
+  <div id="leftpanel">
+
+    <div class="lf">
+      <div class="lf-hdr">Simulation Parameters</div>
+      <div class="lf-body">
+        <div class="dtdur-row">
+          <span class="field-label">Sim Dt (s):</span><input class="pinput" id="g-dt" onchange="sim.dt=this.value">
+          <span class="field-label">Output Dt (s):</span><input class="pinput" id="g-outdt" onchange="sim.out_dt=this.value">
+          <span class="field-label">Dur (s):</span><input class="pinput" id="g-dur" onchange="sim.dur=this.value; updateStatusBar()">
+        </div>
+        <div class="inline-row"><span class="field-label">CoF (Friction):</span><input class="pinput" id="g-cof" onchange="sim.cof=this.value"></div>
+        <div class="inline-row"><span class="field-label">Contact Damping (N·s/m):</span><input class="pinput" id="g-damp" onchange="sim.contact_damping=this.value"></div>
+      </div>
+    </div>
+
+    <div class="lf">
+      <div class="lf-hdr">Model Configuration</div>
+      <div class="lf-body">
+        <div class="radio-row" id="model-radio-row"></div>
+        <div class="btn-row">
+          <button class="tbtn" id="btn-add-model" onclick="addModel()">+ Add Model</button>
+          <button class="tbtn" id="btn-remove-model" onclick="removeSelectedModel()">− Remove Selected</button>
+        </div>
+        <span class="field-label">Model Path:</span>
+        <div class="path-row">
+          <input class="pinput" id="model-path-input" onchange="onPathInputChange(this.value)">
+          <button class="tbtn sm" onclick="browseModelFile()">Browse</button>
+          <button class="tbtn sm" onclick="loadModelFromPath()">Load</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="lf">
+      <div class="lf-hdr">Joint Configuration</div>
+      <div class="lf-body">
+        <span class="field-label">Root Pos (X Y Z):</span>
+        <input class="pinput" id="root-pos-input" onchange="setRootField('pos', this.value)">
+        <span class="field-label mt">Root Vel (X Y Z) m/s:</span>
+        <input class="pinput" id="root-vel-input" onchange="setRootField('vel', this.value)">
+        <span class="field-label mt">Joint:</span>
+        <select class="pselect" id="joint-select" onchange="onJointSelect(this.value)"></select>
+
+        <div id="joint-controls-block"></div>
+      </div>
+    </div>
+
+    <div class="lf">
+      <div class="lf-body">
+        <div class="btn-row" style="margin-bottom:0">
+          <button class="tbtn pri" onclick="exportConfig()">Save Config</button>
+          <button class="tbtn" onclick="loadConfigFile()">Load Config</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT: 3D visualisation of the current configuration -->
+  <div id="viewport">
+    <div id="vp-hud">
+      <div class="hud-chip">LMB Orbit · RMB Pan · Wheel Zoom</div>
+      <div class="hud-chip" id="hud-sel"><b>—</b></div>
+    </div>
+    <div id="vp-cambtns">
+      <button class="cambtn" onclick="setView('front')" title="Front">F</button>
+      <button class="cambtn" onclick="setView('side')" title="Side">S</button>
+      <button class="cambtn" onclick="setView('top')" title="Top">T</button>
+      <button class="cambtn" onclick="setView('iso')" title="Isometric">I</button>
+      <button class="cambtn" onclick="fitCameraToScene()" title="Fit view">⌂</button>
+    </div>
+    <canvas id="axcanvas"></canvas>
+    <div id="vp-empty"><div class="vp-empty-icon">⬡</div><div>No model loaded.<br>Use Model Configuration → Load on the left.</div></div>
+  </div>
+
+  <!-- STATUS BAR -->
+  <div id="statusbar">
+    <span>Selected: <span id="sb-sel">—</span></span>
+    <span style="flex:1"></span>
+    <span>Preview shows initial pose only — joint velocities &amp; torque pulses apply during the dynamics run, not shown here.</span>
+  </div>
+
+</div><!-- #shell -->
+
+<!-- JSON PREVIEW MODAL -->
+<div id="json-modal-bg">
+  <div id="json-modal">
+    <h3>{ } Config Preview <span class="ph-btn" onclick="closeJsonPreview()">✕</span></h3>
+    <pre id="json-preview-content"></pre>
+    <div class="modal-actions">
+      <button class="tbtn" onclick="closeJsonPreview()">Close</button>
+      <button class="tbtn pri" onclick="exportConfig()">⬇ Save Config</button>
+    </div>
+  </div>
+</div>
+
+<!-- WELCOME OVERLAY -->
+<div id="welcome" class="open">
+  <div class="wc">
+    <div class="wc-logo">Open<span>MBD</span></div>
+    <div class="wc-sub2">Simulation Editor</div>
+    <div class="wc-sub">Set up initial pose, joint velocities and torque pulses for up to three bodies — with the same controls as Tab 1 — then save a config file that loads straight back into the simulator.</div>
+    <hr class="wc-sep">
+    <div class="wc-btns">
+      <button class="wc-btn pri" onclick="dismissWelcome()">✦ New Config</button>
+      <button class="wc-btn" onclick="dismissWelcome(); loadConfigFile()">📂 Load Existing Config</button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="config-file-inp" accept=".json" style="display:none" onchange="onConfigFileLoad(event)">
+<input type="file" id="model-file-inp" accept=".json" style="display:none" onchange="onModelFileLoad(event)">
+
+<!-- Bundled body/vehicle models, embedded so the four stock paths work with no upload needed
+     (mirrors these files normally sitting next to openmbd_simulator.py on disk). -->
+<script type="application/json" id="embedded-male">{"name":"openmbd_male","version":"1","citation":"Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.","description":"Open-source multibody ellipsoid human body model, adult male.","units":{"length":"meters","mass":"kilograms","time":"seconds"},"bodies":{"head":{"mass":6.901558991112703,"inertia":[0.03309317009936663,0.03576646812282762,0.024554801771934535,0,0,0],"center_of_mass":[0.028869697145865236,0,0.045366666943502505],"ellipsoids":[{"name":"cranium_geom","dimensions":[0.104,0.084,0.113],"local_position":[0.013403787960580286,0,0.02165227285939893],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,200],[0.005,2000],[0.01,7000],[0.02,13000],[0.05,19000],[0.1,23000]],"unload_curve":[[0,0],[0.001,50],[0.005,500],[0.01,1750],[0.02,3250],[0.05,4750],[0.1,5750]]},{"name":"mandible_geom","dimensions":[0.04,0.05,0.06],"local_position":[0.07217424286466309,0,-0.012372727348227957],"local_orientation":[[0.9961946980917455,0,-0.08715574274765817,0],[0,1,0,0],[0.08715574274765817,0,0.9961946980917455,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,200],[0.005,2000],[0.01,7000],[0.02,13000],[0.05,19000],[0.1,23000]],"unload_curve":[[0,0],[0.001,50],[0.005,500],[0.01,1750],[0.02,3250],[0.05,4750],[0.1,5750]]}]},"Neck":{"mass":1.581542010296145,"inertia":[0.0038659083038176767,0.0038659083038176767,0.002326996759796068,0,0,0],"center_of_mass":[-0.002897898957077458,0,0.06955163709108371],"ellipsoids":[{"name":"cervical_geom","dimensions":[0.067,0.054,0.096],"local_position":[0,0,0.05773939429173047],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,60],[0.005,600],[0.01,3000],[0.02,6500],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,15],[0.005,150],[0.01,750],[0.02,1625],[0.05,3500],[0.1,5000]]}]},"pelvis":{"mass":14.121435445983277,"inertia":[0.15075521613969456,0.1010298089999295,0.12226107455383022,0,0,0],"center_of_mass":[-0.017528030409989608,0,0.015465909185284949],"ellipsoids":[{"name":"pelvis_geom","dimensions":[0.12,0.164,0.142],"local_position":[-0.004015895703165557,0,0.03299393959527455],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,60],[0.005,600],[0.01,3000],[0.02,6500],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,15],[0.005,150],[0.01,750],[0.02,1625],[0.05,3500],[0.1,5000]]}]},"Abdomen":{"mass":2.784494705875176,"inertia":[0.03327327282683101,0.024134743118674737,0.019896245939583956,0,0,0],"center_of_mass":[0,0,0],"ellipsoids":[{"name":"abdomen_geom","dimensions":[0.077,0.166,0.151],"local_position":[-0.008132188798910252,0,0.06495681857819678],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,600],[0.01,2500],[0.02,6000],[0.05,11000],[0.1,15000]],"unload_curve":[[0,0],[0.001,20],[0.005,150],[0.01,625],[0.02,1500],[0.05,2750],[0.1,3750]]}],"description":"Anterior trunk between pelvis and rib cage. Ellipsoids represent paired rectus abdominis, external obliques, and lower abdominal wall. Contact stiffness from Kroell et al. (1971) [9] scaled to regional soft-tissue area."},"LowerBack":{"mass":6.463993994274178,"inertia":[0.05909991096981727,0.037782409411920646,0.04476738149520834,0,0,0.00034236482149526103],"center_of_mass":[0.014062078915007763,0,0.05712872467833203],"ellipsoids":[{"name":"lumbar_geom","dimensions":[0.11,0.172,0.126],"local_position":[0.0412424244940932,0,0.05080108064504429],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,60],[0.005,600],[0.01,3000],[0.02,6500],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,15],[0.005,150],[0.01,750],[0.02,1625],[0.05,3500],[0.1,5000]]}]},"UpperBack":{"mass":15.115920986810801,"inertia":[0.21513401147412914,0.12890097764127745,0.11518297218858367,0,0,0],"center_of_mass":[-0.017528030409989608,0,0.193839395122238],"ellipsoids":[{"name":"thoracic_geom","dimensions":[0.08,0.191,0.201],"local_position":[-0.02509934814478473,0,0.0690810610276061],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,120],[0.005,1200],[0.01,4200],[0.02,7500],[0.05,14000],[0.1,19000]],"unload_curve":[[0,0],[0.001,30],[0.005,300],[0.01,1050],[0.02,1875],[0.05,3500],[0.1,4750]]},{"name":"clavicle_geom","dimensions":[0.08,0.113,0.056],"local_position":[0.013403787960580286,0,0.2515787894139685],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,60],[0.005,600],[0.01,3000],[0.02,6500],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,15],[0.005,150],[0.01,750],[0.02,1625],[0.05,3500],[0.1,5000]]}]},"Chest":{"mass":2.6750764531480895,"inertia":[0.020117843987851342,0.016090625340074313,0.015497307428487811,0,0,0],"center_of_mass":[-0.03299393959527455,0,0],"ellipsoids":[{"name":"rib_cage_geom","dimensions":[0.11,0.177,0.179],"local_position":[-0.09588863694876668,0,0],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,120],[0.005,1200],[0.01,4200],[0.02,7500],[0.05,14000],[0.1,19000]],"unload_curve":[[0,0],[0.001,30],[0.005,300],[0.01,1050],[0.02,1875],[0.05,3500],[0.1,4750]]}]},"ClavicleL":{"mass":0.39781581914497355,"inertia":[0.0011221116855892718,0.0008372930176691295,0.0012835306560428693,0,0,0],"center_of_mass":[-0.04639772755585484,0.0793916671511294,0.024745454696455914],"ellipsoids":[{"name":"shoulder_l_geom","dimensions":[0.075,0.106,0.069],"local_position":[-0.012372727348227957,0.09176439449935733,0.0030931818370569892],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,1000],[0.01,5000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,250],[0.01,1250],[0.02,2000],[0.05,3750],[0.1,5000]]}]},"ClavicleR":{"mass":0.39781581914497355,"inertia":[0.0011221116855892718,0.0008372930176691295,0.0012835306560428693,0,0,0],"center_of_mass":[-0.04639772755585484,-0.0793916671511294,0.024745454696455914],"ellipsoids":[{"name":"shoulder_r_geom","dimensions":[0.075,0.106,0.069],"local_position":[-0.012372727348227957,-0.09176439449935733,0.0030931818370569892],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,1000],[0.01,5000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,250],[0.01,1250],[0.02,2000],[0.05,3750],[0.1,5000]]}]},"UpperArmL":{"mass":2.695059056064685,"inertia":[0.023404881703817593,0.020850638318053206,0.007193246449150202,0,0,0],"center_of_mass":[0.0010310606123523297,-0.0030931818370569892,-0.19344119951374755],"ellipsoids":[{"name":"humerus_l_geom","dimensions":[0.065,0.053,0.159],"local_position":[0,0.0061863636741139785,-0.14537954634167846],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,1000],[0.01,5000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,250],[0.01,1250],[0.02,2000],[0.05,3750],[0.1,5000]]}]},"UpperArmR":{"mass":2.695059056064685,"inertia":[0.023404881703817593,0.020850638318053206,0.007193246449150202,0,0,0],"center_of_mass":[0.0010310606123523297,0.0030931818370569892,-0.19344119951374755],"ellipsoids":[{"name":"humerus_r_geom","dimensions":[0.065,0.053,0.159],"local_position":[0,-0.0061863636741139785,-0.14537954634167846],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,1000],[0.01,5000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,250],[0.01,1250],[0.02,2000],[0.05,3750],[0.1,5000]]}]},"ForearmL":{"mass":1.6110298513568506,"inertia":[0.008084418207966697,0.007452755143910393,0.0015539020002279316,0,0,0],"center_of_mass":[-0.0010310606123523297,-0.0020621212247046595,-0.10723030368464229],"ellipsoids":[{"name":"radioulna_l_geom","dimensions":[0.05,0.045,0.135],"local_position":[0,0,-0.13610000083050755],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,1000],[0.01,5000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,250],[0.01,1250],[0.02,2000],[0.05,3750],[0.1,5000]]},{"name":"ElbowL_ell","dimensions":[0.04,0.04,0.04],"local_position":[0,0,0],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]}]},"ForearmR":{"mass":1.6110298513568506,"inertia":[0.008084418207966697,0.007452755143910393,0.0015539020002279316,0,0,0],"center_of_mass":[-0.0010310606123523297,0.0020621212247046595,-0.10723030368464229],"ellipsoids":[{"name":"radioulna_r_geom","dimensions":[0.05,0.045,0.135],"local_position":[0,0,-0.13610000083050755],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,1000],[0.01,5000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,250],[0.01,1250],[0.02,2000],[0.05,3750],[0.1,5000]]},{"name":"ElbowR_ell","dimensions":[0.04,0.04,0.04],"local_position":[0,0,0],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]}]},"HandL":{"mass":0.6067150301757579,"inertia":[0.0018138452009651173,0.001207709363057263,0.0008316444399681961,0,0,0],"center_of_mass":[0.004124242449409319,0.0020621212247046595,-0.06392575796584446],"ellipsoids":[{"name":"hand_l_geom","dimensions":[0.041,0.036,0.057],"local_position":[0,0.004124242449409319,-0.05019869628956946],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,60],[0.005,600],[0.01,3000],[0.02,6500],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,15],[0.005,150],[0.01,750],[0.02,1625],[0.05,3500],[0.1,5000]]},{"name":"wrist_l_geom","dimensions":[0.031,0.031,0.031],"local_position":[0,0.004124242449409319,0],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]}]},"HandR":{"mass":0.6067150301757579,"inertia":[0.0018138452009651173,0.001207709363057263,0.0008316444399681961,0,0,0],"center_of_mass":[0.004124242449409319,-0.0020621212247046595,-0.06392575796584446],"ellipsoids":[{"name":"hand_r_geom","dimensions":[0.041,0.036,0.057],"local_position":[0,-0.004124242449409319,-0.05019869628956946],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,60],[0.005,600],[0.01,3000],[0.02,6500],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,15],[0.005,150],[0.01,750],[0.02,1625],[0.05,3500],[0.1,5000]]},{"name":"wrist_r_geom","dimensions":[0.031,0.031,0.031],"local_position":[0,-0.004124242449409319,0],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]}]},"ThighL":{"mass":8.950618299808301,"inertia":[0.18134593267236068,0.1808945895887573,0.02235363736162287,-1.9767114686670877e-06,-0.000403172093999729,-0.00040317209399972915],"center_of_mass":[-0.0027896070377118817,0.005458877861106757,-0.21539769069009743],"ellipsoids":[{"name":"femur_1_l_geom","dimensions":[0.094,0.092,0.169],"local_position":[0,0.0103106061235233,-0.05361515184232114],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,800],[0.01,4000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,20],[0.005,200],[0.01,1000],[0.02,2000],[0.05,3750],[0.1,5000]]},{"name":"femur_2_l_geom","dimensions":[0.083,0.087,0.201],"local_position":[0,0.0103106061235233,-0.2509934814478473],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,800],[0.01,4000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,20],[0.005,200],[0.01,1000],[0.02,2000],[0.05,3750],[0.1,5000]]},{"name":"femur_3_l_geom","dimensions":[0.064,0.065,0.115],"local_position":[0,0.0103106061235233,-0.4167546995128117],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,800],[0.01,4000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,20],[0.005,200],[0.01,1000],[0.02,2000],[0.05,3750],[0.1,5000]]}]},"ThighR":{"mass":8.950618299808301,"inertia":[0.18134593267236068,0.1808945895887573,0.02235363736162287,1.9767114686670877e-06,0.000403172093999729,-0.00040317209399972915],"center_of_mass":[-0.0027896070377118817,-0.005458877861106757,-0.21539769069009743],"ellipsoids":[{"name":"femur_1_r_geom","dimensions":[0.094,0.092,0.169],"local_position":[0,-0.0103106061235233,-0.05361515184232114],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,800],[0.01,4000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,20],[0.005,200],[0.01,1000],[0.02,2000],[0.05,3750],[0.1,5000]]},{"name":"femur_2_r_geom","dimensions":[0.083,0.087,0.201],"local_position":[0,-0.0103106061235233,-0.2509934814478473],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,800],[0.01,4000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,20],[0.005,200],[0.01,1000],[0.02,2000],[0.05,3750],[0.1,5000]]},{"name":"femur_3_r_geom","dimensions":[0.064,0.065,0.115],"local_position":[0,-0.0103106061235233,-0.4167546995128117],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,800],[0.01,4000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,20],[0.005,200],[0.01,1000],[0.02,2000],[0.05,3750],[0.1,5000]]}]},"ShankL":{"mass":4.624762817609811,"inertia":[0.07601469723518281,0.07657063631836074,0.005998126445038771,-1.8957689103474043e-37,7.279752615734033e-35,0.00020021927835329475],"center_of_mass":[-0.003370330413360009,0.006186363674113978,-0.17579833257214275],"ellipsoids":[{"name":"tibia_1_l_geom","dimensions":[0.06,0.045,0.066],"local_position":[0.0103106061235233,0,-0.06746704781318134],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]},{"name":"tibia_2_l_geom","dimensions":[0.069,0.06,0.151],"local_position":[0,0,-0.18071530664245003],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]},{"name":"tibia_3_l_geom","dimensions":[0.059,0.044,0.075],"local_position":[-0.00515530306176165,0,-0.33131139551115846],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]}]},"ShankR":{"mass":4.624762817609811,"inertia":[0.07601469723518281,0.07657063631836074,0.005998126445038771,1.8957689103474043e-37,-7.279752615734033e-35,0.00020021927835329475],"center_of_mass":[-0.003370330413360009,-0.006186363674113978,-0.17579833257214275],"ellipsoids":[{"name":"tibia_1_r_geom","dimensions":[0.06,0.045,0.066],"local_position":[0.0103106061235233,0,-0.06746704781318134],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]},{"name":"tibia_2_r_geom","dimensions":[0.069,0.06,0.151],"local_position":[0,0,-0.1819200753533997],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]},{"name":"tibia_3_r_geom","dimensions":[0.059,0.044,0.075],"local_position":[-0.00515530306176165,0,-0.3404475582358601],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]}]},"FootL":{"mass":1.441987832089437,"inertia":[0.006447091060155749,0.00585909584678743,0.0015008922710345568,0,0,0],"center_of_mass":[0.10723030368464229,0,-0.025776515308808246],"ellipsoids":[{"name":"foot_l_geom","dimensions":[0.13,0.05,0.03],"local_position":[0.06083257612878745,0,-0.04021136388174087],"local_orientation":[[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0,0.0,0.0,1.0]],"force_curve":[[0,0],[0.001,100],[0.005,800],[0.01,3000],[0.02,7000],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,200],[0.01,750],[0.02,1750],[0.05,3500],[0.1,5000]]}]},"FootR":{"mass":1.441987832089437,"inertia":[0.006447091060155749,0.00585909584678743,0.0015008922710345568,0,0,0],"center_of_mass":[0.10723030368464229,0,-0.025776515308808246],"ellipsoids":[{"name":"foot_r_geom","dimensions":[0.13,0.05,0.03],"local_position":[0.06083257612878745,0,-0.04021136388174087],"local_orientation":[[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0,0.0,0.0,1.0]],"force_curve":[[0,0],[0.001,100],[0.005,800],[0.01,3000],[0.02,7000],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,200],[0.01,750],[0.02,1750],[0.05,3500],[0.1,5000]]}]}},"joints":[{"name":"rootJoint","type":"free","parent":"GROUND","child":"pelvis","T1":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"lowerbackJnt","type":"spherical","parent":"pelvis","child":"LowerBack","T1":[[1,0,0,-0.04021136388174087],[0,-1,0,0],[0,0,-1,0.08557803082524339],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"upperbackJnt","type":"spherical","parent":"LowerBack","child":"UpperBack","T1":[[1,0,0,0.0023693784648676783],[0,-1,0,0],[0,0,-1,0.21384644619356588],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"pelvis-abdomenJnt","type":"fixed","parent":"pelvis","child":"Abdomen","T1":[[1,0,0,0.048769166964265205],[0,-1,0,0],[0,0,-1,0.09403272784653248],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"upperback-chestJnt","type":"fixed","parent":"UpperBack","child":"Chest","T1":[[1,0,0,0.15424666760790853],[0,-1,0,0],[0,0,-1,0.08465007627412628],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"neckJnt","type":"spherical","parent":"UpperBack","child":"Neck","T1":[[1,0,0,0.01639386373640204],[0,-1,0,0],[0,0,-1,0.26405462282343173],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"headJnt","type":"spherical","parent":"Neck","child":"head","T1":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0.15527772822026087],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"upperback-claviclelJnt","type":"fixed","parent":"UpperBack","child":"ClavicleL","T1":[[1,0,0,0.020079478515827785],[0,-1,0,0.018559091022341937],[0,0,-1,0.21652272859398927],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"upperback-claviclerJnt","type":"fixed","parent":"UpperBack","child":"ClavicleR","T1":[[1,0,0,0.020079478515827785],[0,-1,0,-0.018559091022341937],[0,0,-1,0.21652272859398927],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"shoulderlJnt","type":"spherical","parent":"ClavicleL","child":"UpperArmL","T1":[[1,0,0,-0.025400540322522144],[0,-1,0,0.1439698609584852],[0,0,-1,-0.0002981802559600426],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"shoulderrJnt","type":"spherical","parent":"ClavicleR","child":"UpperArmR","T1":[[1,0,0,-0.025400540322522144],[0,-1,0,-0.1439698609584852],[0,0,-1,-0.0002981802559600426],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"elbowlJnt","type":"spherical","parent":"UpperArmL","child":"ForearmL","T1":[[1,0,0,0],[0,-1,0,0.006908106102760611],[0,0,-1,-0.2772521986615414],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"elbowrJnt","type":"spherical","parent":"UpperArmR","child":"ForearmR","T1":[[1,0,0,0],[0,-1,0,-0.006908106102760611],[0,0,-1,-0.2772521986615414],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"wristlJnt","type":"spherical","parent":"ForearmL","child":"HandL","T1":[[1,0,0,0],[0,-1,0,-0.006701893980290143],[0,0,-1,-0.29209947147941506],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"wristrJnt","type":"spherical","parent":"ForearmR","child":"HandR","T1":[[1,0,0,0],[0,-1,0,0.006701893980290143],[0,0,-1,-0.29209947147941506],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"hiplJnt","type":"spherical","parent":"pelvis","child":"ThighL","T1":[[1,0,0,0],[0,-1,0,0.078773030783718],[0,0,-1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"hiprJnt","type":"spherical","parent":"pelvis","child":"ThighR","T1":[[1,0,0,0],[0,-1,0,-0.078773030783718],[0,0,-1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"kneelJnt","type":"spherical","parent":"ThighL","child":"ShankL","T1":[[1,0,0,0],[0,-1,0,0.01204768710949667],[0,0,-1,-0.45614551344405974],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"kneerJnt","type":"spherical","parent":"ThighR","child":"ShankR","T1":[[1,0,0,0],[0,-1,0,-0.01204768710949667],[0,0,-1,-0.45614551344405974],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"anklelJnt","type":"spherical","parent":"ShankL","child":"FootL","T1":[[1,0,0,0.018563477887882786],[0,-1,0,0],[0,0,-1,-0.3737594130936184],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"anklerJnt","type":"spherical","parent":"ShankR","child":"FootR","T1":[[1,0,0,0.018563477887882786],[0,-1,0,0],[0,0,-1,-0.3737594130936184],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]}],"metadata":{"name":"OpenMBD Male Model","version":"1.0.0","description":"Open-source male multibody dynamics model","license":"MIT License","contact":"Dr Gregory Tierney (g.tierney@ulster.ac.uk)"},"sex":"male","height_cm":175.4,"mass_kg":90.3,"source":"US adult male (CDC NHANES 2021-2023)"}</script>
+<script type="application/json" id="embedded-female">{"name":"openmbd_female","version":"1","citation":"Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.","description":"Open-source multibody dynamics model, adult female","units":{"length":"meters","mass":"kilograms","time":"seconds"},"bodies":{"head":{"mass":5.070809115584966,"inertia":[0.020389718826669328,0.02203681987122304,0.015128967774046199,0,0,0],"center_of_mass":[0.026437088916022682,0,0.041543996868035636],"ellipsoids":[{"name":"cranium_geom","dimensions":[0.0954912867160254,0.0765919695534787,0.10344889394236084],"local_position":[0.013332759991922724,0,0.021537535371567485],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,200],[0.005,2000],[0.01,7000],[0.02,13000],[0.05,19000],[0.1,23000]],"unload_curve":[[0,0],[0.001,50],[0.005,500],[0.01,1750],[0.02,3250],[0.05,4750],[0.1,5750]]},{"name":"mandible_geom","dimensions":[0.03680393342180146,0.045756241551428836,0.05470854968105622],"local_position":[0.0717917845718916,0,-0.012307163069467131],"local_orientation":[[0.9961946980917455,0,-0.08715574274765817,0],[0,1,0,0],[0.08715574274765817,0,0.9961946980917455,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,200],[0.005,2000],[0.01,7000],[0.02,13000],[0.05,19000],[0.1,23000]],"unload_curve":[[0,0],[0.001,50],[0.005,500],[0.01,1750],[0.02,3250],[0.05,4750],[0.1,5750]]}]},"Neck":{"mass":1.3284305317774987,"inertia":[0.0027230302893482277,0.0027230302893482277,0.001639066983012103,0,0,0],"center_of_mass":[-0.002653717218120476,0,0.06369110159838545],"ellipsoids":[{"name":"cervical_geom","dimensions":[0.06167145600409974,0.049735045164596564,0.08753367948968994],"local_position":[0,0,0.05743342765751328],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,60],[0.005,600],[0.01,3000],[0.02,6500],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,15],[0.005,150],[0.01,750],[0.02,1625],[0.05,3500],[0.1,5000]]}]},"pelvis":{"mass":11.086595571076314,"inertia":[0.0992509140777696,0.06651379069400731,0.08049156583977668,0,0,0],"center_of_mass":[-0.01605108969901377,0,0.01416272620501215],"ellipsoids":[{"name":"pelvis_geom","dimensions":[0.10941709936211244,0.17407265807608796,0.130305818331243],"local_position":[-0.003994615083464965,0,0.032819101518579016],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,60],[0.005,600],[0.01,3000],[0.02,6500],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,15],[0.005,150],[0.01,750],[0.02,1625],[0.05,3500],[0.1,5000]]}]},"Abdomen":{"mass":2.186078518145409,"inertia":[0.02190572788779581,0.01588930304966018,0.013098854200772605,0,0,0],"center_of_mass":[0,0,0],"ellipsoids":[{"name":"abdomen_geom","dimensions":[0.07062376413372712,0.16412564904316868,0.13826342555757845],"local_position":[-0.008089095544016553,0,0.06461260611470244],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,600],[0.01,2500],[0.02,6000],[0.05,11000],[0.1,15000]],"unload_curve":[[0,0],[0.001,20],[0.005,150],[0.01,625],[0.02,1500],[0.05,2750],[0.1,3750]]}],"description":"Anterior trunk between pelvis and rib cage. Ellipsoids represent paired rectus abdominis, external obliques, and lower abdominal wall. Contact stiffness from Kroell et al. (1971) [9] scaled to regional soft-tissue area."},"LowerBack":{"mass":5.074816045614409,"inertia":[0.03890890369082689,0.024874354375365944,0.02947296715856547,0,0,0.00022539864524481938],"center_of_mass":[0.012877184985414096,0,0.05231496424604347],"ellipsoids":[{"name":"lumbar_geom","dimensions":[0.10046479123248507,0.17009385446292027,0.11538530478186404],"local_position":[0.041023876898223774,0,0.0505318808058318],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,60],[0.005,600],[0.01,3000],[0.02,6500],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,15],[0.005,150],[0.01,750],[0.02,1625],[0.05,3500],[0.1,5000]]}]},"UpperBack":{"mass":11.867356070574541,"inertia":[0.14163521392347064,0.08486299966271171,0.07583163998330894,0,0,0],"center_of_mass":[-0.01605108969901377,0,0.17750616843615227],"ellipsoids":[{"name":"thoracic_geom","dimensions":[0.07360786684360292,0.1750673589793799,0.18401966710900727],"local_position":[-0.02496634427165603,0,0.06871499380452481],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,120],[0.005,1200],[0.01,4200],[0.02,7500],[0.05,14000],[0.1,19000]],"unload_curve":[[0,0],[0.001,30],[0.005,300],[0.01,1050],[0.02,1875],[0.05,3500],[0.1,4750]]},{"name":"clavicle_geom","dimensions":[0.07360786684360292,0.10046479123248507,0.05172444697118042],"local_position":[0.013332759991922724,0,0.250245649079165],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,60],[0.005,600],[0.01,3000],[0.02,6500],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,15],[0.005,150],[0.01,750],[0.02,1625],[0.05,3500],[0.1,5000]]}]},"Chest":{"mass":2.1001753590282473,"inertia":[0.013244745065523894,0.010593393144058504,0.010202777505199899,0,0,0],"center_of_mass":[-0.030213815904025915,0,0],"ellipsoids":[{"name":"rib_cage_geom","dimensions":[0.10046479123248507,0.16213624723658482,0.16412564904316868],"local_position":[-0.09538051378837027,0,0],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,120],[0.005,1200],[0.01,4200],[0.02,7500],[0.05,14000],[0.1,19000]],"unload_curve":[[0,0],[0.001,30],[0.005,300],[0.01,1050],[0.02,1875],[0.05,3500],[0.1,4750]]}]},"ClavicleL":{"mass":0.3344221991306809,"inertia":[0.0007910281559616733,0.0005902463723284199,0.0009048198151832657,0,0,0],"center_of_mass":[-0.04248817861503645,0.07270199451906237,0.022660361928019436],"ellipsoids":[{"name":"shoulder_l_geom","dimensions":[0.06863436232714326,0.09449658581273347,0.0636608578106836],"local_position":[-0.012307163069467131,0.09127812609854787,0.003076790767366783],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,1000],[0.01,5000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,250],[0.01,1250],[0.02,2000],[0.05,3750],[0.1,5000]]}]},"ClavicleR":{"mass":0.3344221991306809,"inertia":[0.0007910281559616733,0.0005902463723284199,0.0009048198151832657,0,0,0],"center_of_mass":[-0.04248817861503645,-0.07270199451906237,0.022660361928019436],"ellipsoids":[{"name":"shoulder_r_geom","dimensions":[0.06863436232714326,0.09449658581273347,0.0636608578106836],"local_position":[-0.012307163069467131,-0.09127812609854787,0.003076790767366783],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,1000],[0.01,5000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,250],[0.01,1250],[0.02,2000],[0.05,3750],[0.1,5000]]}]},"UpperArmL":{"mass":1.935713060590069,"inertia":[0.014096845889734335,0.012558415752395904,0.004332518656738578,0,0,0],"center_of_mass":[0.0009441817470008098,-0.0028325452410024295,-0.17714152544546058],"ellipsoids":[{"name":"humerus_l_geom","dimensions":[0.05968205419751588,0.048740344261304636,0.14522633188062195],"local_position":[0,0.006153581534733566,-0.14460916606623875],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,1000],[0.01,5000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,250],[0.01,1250],[0.02,2000],[0.05,3750],[0.1,5000]]}]},"UpperArmR":{"mass":1.935713060590069,"inertia":[0.014096845889734335,0.012558415752395904,0.004332518656738578,0,0,0],"center_of_mass":[0.0009441817470008098,0.0028325452410024295,-0.17714152544546058],"ellipsoids":[{"name":"humerus_r_geom","dimensions":[0.05968205419751588,0.048740344261304636,0.14522633188062195],"local_position":[0,-0.006153581534733566,-0.14460916606623875],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,1000],[0.01,5000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,250],[0.01,1250],[0.02,2000],[0.05,3750],[0.1,5000]]}]},"ForearmL":{"mass":1.0475623622016845,"inertia":[0.004408266863597222,0.004063833995008892,0.0008473107799064582,0,0,0],"center_of_mass":[-0.0009441817470008098,-0.0018883634940016197,-0.09819490168808422],"ellipsoids":[{"name":"radioulna_l_geom","dimensions":[0.045756241551428836,0.04078273703496919,0.12334291200819948],"local_position":[0,0,-0.13537879376413844],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,1000],[0.01,5000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,250],[0.01,1250],[0.02,2000],[0.05,3750],[0.1,5000]]},{"name":"ElbowL_ell","dimensions":[0.03680393342180146,0.03680393342180146,0.03680393342180146],"local_position":[0,0,0],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]}]},"ForearmR":{"mass":1.0475623622016845,"inertia":[0.004408266863597222,0.004063833995008892,0.0008473107799064582,0,0,0],"center_of_mass":[-0.0009441817470008098,0.0018883634940016197,-0.09819490168808422],"ellipsoids":[{"name":"radioulna_r_geom","dimensions":[0.045756241551428836,0.04078273703496919,0.12334291200819948],"local_position":[0,0,-0.13537879376413844],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,1000],[0.01,5000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,250],[0.01,1250],[0.02,2000],[0.05,3750],[0.1,5000]]},{"name":"ElbowR_ell","dimensions":[0.03680393342180146,0.03680393342180146,0.03680393342180146],"local_position":[0,0,0],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]}]},"HandL":{"mass":0.42509777016879946,"inertia":[0.0010657297780100876,0.0007095929855022252,0.0004886349970322931,0,0,0],"center_of_mass":[0.0037767269880032393,0.0018883634940016197,-0.05853926831405022],"ellipsoids":[{"name":"hand_l_geom","dimensions":[0.03779863432509339,0.03282512980863373,0.05172444697118042],"local_position":[0,0.004102387689822377,-0.04993268854331206],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,60],[0.005,600],[0.01,3000],[0.02,6500],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,15],[0.005,150],[0.01,750],[0.02,1625],[0.05,3500],[0.1,5000]]},{"name":"wrist_l_geom","dimensions":[0.02884632619546601,0.02884632619546601,0.02884632619546601],"local_position":[0,0.004102387689822377,0],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]}]},"HandR":{"mass":0.42509777016879946,"inertia":[0.0010657297780100876,0.0007095929855022252,0.0004886349970322931,0,0,0],"center_of_mass":[0.0037767269880032393,-0.0018883634940016197,-0.05853926831405022],"ellipsoids":[{"name":"hand_r_geom","dimensions":[0.03779863432509339,0.03282512980863373,0.05172444697118042],"local_position":[0,-0.004102387689822377,-0.04993268854331206],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,60],[0.005,600],[0.01,3000],[0.02,6500],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,15],[0.005,150],[0.01,750],[0.02,1625],[0.05,3500],[0.1,5000]]},{"name":"wrist_r_geom","dimensions":[0.02884632619546601,0.02884632619546601,0.02884632619546601],"local_position":[0,-0.004102387689822377,0],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]}]},"ThighL":{"mass":11.219544719812243,"inertia":[0.1906219130858129,0.19014748346510577,0.02349704267146487,-2.077821742254144e-06,-0.00042379464887085897,-0.00042379464887085913],"center_of_mass":[-0.0025545501542372125,0.004998903821769267,-0.19724792651299528],"ellipsoids":[{"name":"femur_1_l_geom","dimensions":[0.10643299665223664,0.10444359484565278,0.1551733409135413],"local_position":[0,0.010255969224555943,-0.053331039967690896],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,800],[0.01,4000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,20],[0.005,200],[0.01,1000],[0.02,2000],[0.05,3750],[0.1,5000]]},{"name":"femur_2_l_geom","dimensions":[0.09449658581273347,0.0984753894259012,0.18401966710900727],"local_position":[0,0.010255969224555943,-0.2496634427165603],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,800],[0.01,4000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,20],[0.005,200],[0.01,1000],[0.02,2000],[0.05,3750],[0.1,5000]]},{"name":"femur_3_l_geom","dimensions":[0.07261316594031098,0.07360786684360292,0.10543829574894471],"local_position":[0,0.010255969224555943,-0.4145462760565512],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,800],[0.01,4000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,20],[0.005,200],[0.01,1000],[0.02,2000],[0.05,3750],[0.1,5000]]}]},"ThighR":{"mass":11.219544719812243,"inertia":[0.1906219130858129,0.19014748346510577,0.02349704267146487,2.077821742254144e-06,0.00042379464887085897,-0.00042379464887085913],"center_of_mass":[-0.0025545501542372125,-0.004998903821769267,-0.19724792651299528],"ellipsoids":[{"name":"femur_1_r_geom","dimensions":[0.10643299665223664,0.10444359484565278,0.1551733409135413],"local_position":[0,-0.010255969224555943,-0.053331039967690896],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,800],[0.01,4000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,20],[0.005,200],[0.01,1000],[0.02,2000],[0.05,3750],[0.1,5000]]},{"name":"femur_2_r_geom","dimensions":[0.09449658581273347,0.0984753894259012,0.18401966710900727],"local_position":[0,-0.010255969224555943,-0.2496634427165603],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,800],[0.01,4000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,20],[0.005,200],[0.01,1000],[0.02,2000],[0.05,3750],[0.1,5000]]},{"name":"femur_3_r_geom","dimensions":[0.07261316594031098,0.07360786684360292,0.10543829574894471],"local_position":[0,-0.010255969224555943,-0.4145462760565512],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,80],[0.005,800],[0.01,4000],[0.02,8000],[0.05,15000],[0.1,20000]],"unload_curve":[[0,0],[0.001,20],[0.005,200],[0.01,1000],[0.02,2000],[0.05,3750],[0.1,5000]]}]},"ShankL":{"mass":3.651286204485581,"inertia":[0.05032650706518043,0.05069457367880911,0.003971136686635035,-1.2551181670219092e-37,4.819653761364132e-35,0.00013255774597716426],"center_of_mass":[-0.0030863408218030205,0.005665090482004858,-0.16098527553012104],"ellipsoids":[{"name":"tibia_1_l_geom","dimensions":[0.060676755100807805,0.045756241551428836,0.060676755100807805],"local_position":[0.010255969224555943,0,-0.0671095334022114],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]},{"name":"tibia_2_l_geom","dimensions":[0.06962906323043519,0.060676755100807805,0.13826342555757845],"local_position":[0,0,-0.17975767875592338],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]},{"name":"tibia_3_l_geom","dimensions":[0.05968205419751588,0.04376683974484497,0.06863436232714326],"local_position":[-0.005127984612277972,0,-0.3295557443858596],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]}]},"ShankR":{"mass":3.651286204485581,"inertia":[0.05032650706518043,0.05069457367880911,0.003971136686635035,1.2551181670219092e-37,-4.819653761364132e-35,0.00013255774597716426],"center_of_mass":[-0.0030863408218030205,-0.005665090482004858,-0.16098527553012104],"ellipsoids":[{"name":"tibia_1_r_geom","dimensions":[0.060676755100807805,0.045756241551428836,0.060676755100807805],"local_position":[0.010255969224555943,0,-0.0671095334022114],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]},{"name":"tibia_2_r_geom","dimensions":[0.06962906323043519,0.060676755100807805,0.13826342555757845],"local_position":[0,0,-0.1809560632809629],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]},{"name":"tibia_3_r_geom","dimensions":[0.05968205419751588,0.04376683974484497,0.06863436232714326],"local_position":[-0.005127984612277972,0,-0.3386434937007424],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,150],[0.005,1500],[0.01,5500],[0.02,9500],[0.05,17000],[0.1,22000]],"unload_curve":[[0,0],[0.001,37.5],[0.005,375],[0.01,1375],[0.02,2375],[0.05,4250],[0.1,5500]]}]},"FootL":{"mass":0.9792430777102702,"inertia":[0.003671432315875557,0.0033365860095650587,0.0008547148372976457,0,0,0],"center_of_mass":[0.09819490168808422,0,-0.02360454367502025],"ellipsoids":[{"name":"foot_l_geom","dimensions":[0.11936410839503175,0.0477456433580127,0.02884632619546601],"local_position":[0.06051021842488005,0,-0.03999827997576818],"local_orientation":[[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0,0.0,0.0,1.0]],"force_curve":[[0,0],[0.001,100],[0.005,800],[0.01,3000],[0.02,7000],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,200],[0.01,750],[0.02,1750],[0.05,3500],[0.1,5000]]}]},"FootR":{"mass":0.9792430777102702,"inertia":[0.003671432315875557,0.0033365860095650587,0.0008547148372976457,0,0,0],"center_of_mass":[0.09819490168808422,0,-0.02360454367502025],"ellipsoids":[{"name":"foot_r_geom","dimensions":[0.11936410839503175,0.0477456433580127,0.02884632619546601],"local_position":[0.06051021842488005,0,-0.03999827997576818],"local_orientation":[[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0,0.0,0.0,1.0]],"force_curve":[[0,0],[0.001,100],[0.005,800],[0.01,3000],[0.02,7000],[0.05,14000],[0.1,20000]],"unload_curve":[[0,0],[0.001,25],[0.005,200],[0.01,750],[0.02,1750],[0.05,3500],[0.1,5000]]}]}},"joints":[{"name":"rootJoint","type":"free","parent":"GROUND","child":"pelvis","T1":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"lowerbackJnt","type":"spherical","parent":"pelvis","child":"LowerBack","T1":[[1,0,0,-0.03682308813303159],[0,-1,0,0],[0,0,-1,0.07836708500106723],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"upperbackJnt","type":"spherical","parent":"LowerBack","child":"UpperBack","T1":[[1,0,0,0.0021697307330564588],[0,-1,0,0],[0,0,-1,0.195827392432638],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"pelvis-abdomenJnt","type":"fixed","parent":"pelvis","child":"Abdomen","T1":[[1,0,0,0.044659796633138314],[0,-1,0,0],[0,0,-1,0.08610937532647388],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"upperback-chestJnt","type":"fixed","parent":"UpperBack","child":"Chest","T1":[[1,0,0,0.14124958935132115],[0,-1,0,0],[0,0,-1,0.0775173214287665],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"neckJnt","type":"spherical","parent":"UpperBack","child":"Neck","T1":[[1,0,0,0.015012489777312876],[0,-1,0,0],[0,0,-1,0.24180494540690747],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"headJnt","type":"spherical","parent":"Neck","child":"head","T1":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0.14219377109832199],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"upperback-claviclelJnt","type":"fixed","parent":"UpperBack","child":"ClavicleL","T1":[[1,0,0,0.018387548585224227],[0,-1,0,0.01648544493155122],[0,0,-1,0.1982781668701701],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"upperback-claviclerJnt","type":"fixed","parent":"UpperBack","child":"ClavicleR","T1":[[1,0,0,0.018387548585224227],[0,-1,0,-0.01648544493155122],[0,0,-1,0.1982781668701701],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"shoulderlJnt","type":"spherical","parent":"ClavicleL","child":"UpperArmL","T1":[[1,0,0,-0.023260248960308642],[0,-1,0,0.12788380701280155],[0,0,-1,-0.0002730550964905798],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"shoulderrJnt","type":"spherical","parent":"ClavicleR","child":"UpperArmR","T1":[[1,0,0,-0.023260248960308642],[0,-1,0,-0.12788380701280155],[0,0,-1,-0.0002730550964905798],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"elbowlJnt","type":"spherical","parent":"UpperArmL","child":"ForearmL","T1":[[1,0,0,0],[0,-1,0,0.006326017704905427],[0,0,-1,-0.2538904717685177],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"elbowrJnt","type":"spherical","parent":"UpperArmR","child":"ForearmR","T1":[[1,0,0,0],[0,-1,0,-0.006326017704905427],[0,0,-1,-0.2538904717685177],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"wristlJnt","type":"spherical","parent":"ForearmL","child":"HandL","T1":[[1,0,0,0],[0,-1,0,-0.0061371813555052635],[0,0,-1,-0.26748668892532945],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"wristrJnt","type":"spherical","parent":"ForearmR","child":"HandR","T1":[[1,0,0,0],[0,-1,0,0.0061371813555052635],[0,0,-1,-0.26748668892532945],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"hiplJnt","type":"spherical","parent":"pelvis","child":"ThighL","T1":[[1,0,0,0],[0,-1,0,0.08376214161202432],[0,0,-1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"hiprJnt","type":"spherical","parent":"pelvis","child":"ThighR","T1":[[1,0,0,0],[0,-1,0,-0.08376214161202432],[0,0,-1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"kneelJnt","type":"spherical","parent":"ThighL","child":"ShankL","T1":[[1,0,0,0],[0,-1,0,0.011032529151134536],[0,0,-1,-0.4177099412105388],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"kneerJnt","type":"spherical","parent":"ThighR","child":"ShankR","T1":[[1,0,0,0],[0,-1,0,-0.011032529151134536],[0,0,-1,-0.4177099412105388],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"anklelJnt","type":"spherical","parent":"ShankL","child":"FootL","T1":[[1,0,0,0.0169992886670398],[0,-1,0,0],[0,0,-1,-0.34226582936536376],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]},{"name":"anklerJnt","type":"spherical","parent":"ShankR","child":"FootR","T1":[[1,0,0,0.0169992886670398],[0,-1,0,0],[0,0,-1,-0.34226582936536376],[0,0,0,1]],"T2":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]]}],"metadata":{"name":"OpenMBD Female Model","version":"1.0.0","description":"Open-source female multibody dynamics model","license":"MIT License","contact":"Dr Gregory Tierney (g.tierney@ulster.ac.uk)","derivation":"Derived from openmbd_male.json. Segment masses per de Leva (1996) female mass fractions relative to total body mass (77.9 kg, CDC NHANES 2021-2023); trunk residual mass distributed using male internal trunk proportions. All segment masses normalised to sum exactly to 77.9 kg (normalisation factor 0.9745, accounting for de Leva fractions summing to 102.6% when clavicle and neck are included). Inertia tensors scaled by segment mass ratio and height-ratio squared (H_f/H_m = 0.9206). Shoulder geometry narrowed by factor 0.893 (biacromial ratio, CDC-NHANES/ANSUR). Hip geometry widened by factor 1.069 (sitting hip breadth ratio, ANSUR). Lower-limb ellipsoid radii scaled by cube-root of de Leva (1996) female/male mass fraction ratio. Biacromial and biiliac width scaling per Gordon et al. (1989)."},"sex":"female","height_cm":161.2,"mass_kg":77.9,"source":"US adult female (CDC NHANES 2021-2023)"}</script>
+<script type="application/json" id="embedded-bicycle">{"name":"openmbd_bicycle","version":"1.0","citation":"Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.","description":"Simple 3-body bicycle model","units":{"length":"meters","mass":"kilograms","time":"seconds"},"bodies":{"Bicycle_body":{"mass":15.3,"inertia":[2.269,2.53,2.94,-0.244,0.0,0.0],"center_of_mass":[0.4,0.0,0.55],"ellipsoids":[{"name":"chain_stay_L","dimensions":[0.2,0.022,0.08],"local_position":[0.2,0.06,0.14],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"chain_stay_R","dimensions":[0.2,0.022,0.08],"local_position":[0.2,-0.06,0.14],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"seat_tube","dimensions":[0.06,0.016,0.26],"local_position":[0.38,0.0,0.56],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"top_tube","dimensions":[0.28,0.016,0.05],"local_position":[0.62,0.0,0.85],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"down_tube","dimensions":[0.28,0.016,0.2],"local_position":[0.62,0.0,0.55],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"seat_stay_L","dimensions":[0.11,0.022,0.12],"local_position":[0.1,0.06,0.46],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"seat_stay_R","dimensions":[0.11,0.022,0.12],"local_position":[0.1,-0.06,0.46],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"head_tube","dimensions":[0.04,0.022,0.07],"local_position":[0.93,0.0,0.88],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"fork_L","dimensions":[0.1,0.013,0.2],"local_position":[0.97,0.06,0.51],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"fork_R","dimensions":[0.1,0.013,0.2],"local_position":[0.97,-0.06,0.51],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"handlebars","dimensions":[0.04,0.23,0.025],"local_position":[0.9,0.0,0.97],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"grip_L","dimensions":[0.04,0.08,0.02],"local_position":[0.9,0.22,0.97],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,50],[0.005,300],[0.01,700],[0.02,1500],[0.05,3500],[0.1,7000]],"unload_curve":[[0,0],[0.001,12],[0.005,75],[0.01,175],[0.02,375],[0.05,875],[0.1,1750]]},{"name":"grip_R","dimensions":[0.04,0.08,0.02],"local_position":[0.9,-0.22,0.97],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,50],[0.005,300],[0.01,700],[0.02,1500],[0.05,3500],[0.1,7000]],"unload_curve":[[0,0],[0.001,12],[0.005,75],[0.01,175],[0.02,375],[0.05,875],[0.1,1750]]},{"name":"saddle","dimensions":[0.14,0.07,0.025],"local_position":[0.25,0.0,0.94],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,50],[0.005,300],[0.01,700],[0.02,1500],[0.05,3500],[0.1,7000]],"unload_curve":[[0,0],[0.001,12],[0.005,75],[0.01,175],[0.02,375],[0.05,875],[0.1,1750]]},{"name":"crank_L","dimensions":[0.04,0.085,0.016],"local_position":[0.4,0.09,0.29],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"crank_R","dimensions":[0.04,0.085,0.016],"local_position":[0.4,-0.09,0.29],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,100],[0.005,500],[0.01,1000],[0.02,2000],[0.05,5000],[0.1,10000]],"unload_curve":[[0,0],[0.001,25],[0.005,125],[0.01,250],[0.02,500],[0.05,1250],[0.1,2500]]},{"name":"pedal_L","dimensions":[0.06,0.1,0.016],"local_position":[0.4,0.175,0.29],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,50],[0.005,300],[0.01,700],[0.02,1500],[0.05,3500],[0.1,7000]],"unload_curve":[[0,0],[0.001,12],[0.005,75],[0.01,175],[0.02,375],[0.05,875],[0.1,1750]]},{"name":"pedal_R","dimensions":[0.06,0.1,0.016],"local_position":[0.4,-0.175,0.29],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,50],[0.005,300],[0.01,700],[0.02,1500],[0.05,3500],[0.1,7000]],"unload_curve":[[0,0],[0.001,12],[0.005,75],[0.01,175],[0.02,375],[0.05,875],[0.1,1750]]}]},"frontwheel_body":{"mass":1.5,"inertia":[0.06,0.06,0.113,0.0,0.0,0.0],"center_of_mass":[0.0,0.0,0.0],"ellipsoids":[{"name":"front_wheel","dimensions":[0.337,0.015,0.337],"local_position":[0.0,0.0,0.0],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.01,500],[0.02,1200],[0.03,2170],[0.035,2800],[0.0405,3500]],"unload_curve":[[0,0],[0.01,125],[0.02,300],[0.03,542],[0.035,700],[0.0405,875]]}]},"backwheel_body":{"mass":1.5,"inertia":[0.06,0.06,0.113,0.0,0.0,0.0],"center_of_mass":[0.0,0.0,0.0],"ellipsoids":[{"name":"rear_wheel","dimensions":[0.337,0.015,0.337],"local_position":[0.0,0.0,0.0],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.01,500],[0.02,1200],[0.03,2170],[0.035,2800],[0.0405,3500]],"unload_curve":[[0,0],[0.01,125],[0.02,300],[0.03,542],[0.035,700],[0.0405,875]]}]}},"joints":[{"name":"bike_free_jnt","type":"free","parent":"GROUND","child":"Bicycle_body","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,0.337],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"note":"Anchor = rear axle centre. Initial position includes wheel radius offset in Z."},{"name":"front_wheel_jnt","type":"revolute","parent":"Bicycle_body","child":"frontwheel_body","T1":[[1,0,0,1.0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"note":"Front axle 1.00m forward of rear axle."},{"name":"rear_wheel_jnt","type":"revolute","parent":"Bicycle_body","child":"backwheel_body","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"note":"Rear axle = Bicycle_body reference point."}],"contact_pairs":[{"body1":"Bicycle_body","body2":"frontwheel_body","description":"Frame-front wheel"},{"body1":"Bicycle_body","body2":"backwheel_body","description":"Frame-rear wheel"},{"surfaces":["saddle"],"friction":0.8,"description":"Pelvis-to-saddle"},{"surfaces":["handlebars","grip_L","grip_R"],"friction":0.8,"description":"Hand-to-handlebar"},{"surfaces":["pedal_L","pedal_R"],"friction":0.9,"description":"Foot-to-pedal"}],"metadata":{"name":"OpenMBD Bicycle Model","version":"1.0.0","description":"Open-source male multibody dynamics model","license":"MIT License","contact":"Dr Gregory Tierney (g.tierney@ulster.ac.uk)"}}</script>
+<script type="application/json" id="embedded-car">{"name":"openmbd_car","version":"1.0","citation":"Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.","description":"Multi-rigid-body car model for pedestrian impact simulation.","units":{"length":"meters","mass":"kilograms","time":"seconds"},"bodies":{"car_body":{"mass":1198,"inertia":[345.1837,1933.7317,2207.0355,0,0,0],"center_of_mass":[-0.1,0,0.55],"ellipsoids":[{"name":"floor_main","dimensions":[1.8,0.84,0.15],"local_position":[0,0,0.27],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1000],[0.003,5000],[0.005,12000],[0.008,25000],[0.01,35000],[0.015,50000],[0.02,60000],[0.05,70000],[0.1,80000]],"unload_curve":[[0,0],[0.001,250],[0.003,1250],[0.005,3000],[0.008,6250],[0.01,8750],[0.015,12500],[0.02,15000],[0.05,17500],[0.1,20000]]},{"name":"floor_front","dimensions":[0.5,0.74,0.14],"local_position":[1.48,0,0.29],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1000],[0.003,5000],[0.005,12000],[0.008,25000],[0.01,35000],[0.015,50000],[0.02,60000],[0.05,70000],[0.1,80000]],"unload_curve":[[0,0],[0.001,250],[0.003,1250],[0.005,3000],[0.008,6250],[0.01,8750],[0.015,12500],[0.02,15000],[0.05,17500],[0.1,20000]]},{"name":"floor_rear","dimensions":[0.5,0.74,0.14],"local_position":[-1.48,0,0.29],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1000],[0.003,5000],[0.005,12000],[0.008,25000],[0.01,35000],[0.015,50000],[0.02,60000],[0.05,70000],[0.1,80000]],"unload_curve":[[0,0],[0.001,250],[0.003,1250],[0.005,3000],[0.008,6250],[0.01,8750],[0.015,12500],[0.02,15000],[0.05,17500],[0.1,20000]]},{"name":"sill_L","dimensions":[1.52,0.1,0.2],"local_position":[0,0.88,0.38],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1000],[0.003,5000],[0.005,12000],[0.008,25000],[0.01,35000],[0.015,50000],[0.02,60000],[0.05,70000],[0.1,80000]],"unload_curve":[[0,0],[0.001,250],[0.003,1250],[0.005,3000],[0.008,6250],[0.01,8750],[0.015,12500],[0.02,15000],[0.05,17500],[0.1,20000]]},{"name":"sill_R","dimensions":[1.52,0.1,0.2],"local_position":[0,-0.88,0.38],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1000],[0.003,5000],[0.005,12000],[0.008,25000],[0.01,35000],[0.015,50000],[0.02,60000],[0.05,70000],[0.1,80000]],"unload_curve":[[0,0],[0.001,250],[0.003,1250],[0.005,3000],[0.008,6250],[0.01,8750],[0.015,12500],[0.02,15000],[0.05,17500],[0.1,20000]]},{"name":"chassis_L","dimensions":[2,0.09,0.08],"local_position":[0,0.46,0.17],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1000],[0.003,5000],[0.005,12000],[0.008,25000],[0.01,35000],[0.015,50000],[0.02,60000],[0.05,70000],[0.1,80000]],"unload_curve":[[0,0],[0.001,250],[0.003,1250],[0.005,3000],[0.008,6250],[0.01,8750],[0.015,12500],[0.02,15000],[0.05,17500],[0.1,20000]]},{"name":"chassis_R","dimensions":[2,0.09,0.08],"local_position":[0,-0.46,0.17],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1000],[0.003,5000],[0.005,12000],[0.008,25000],[0.01,35000],[0.015,50000],[0.02,60000],[0.05,70000],[0.1,80000]],"unload_curve":[[0,0],[0.001,250],[0.003,1250],[0.005,3000],[0.008,6250],[0.01,8750],[0.015,12500],[0.02,15000],[0.05,17500],[0.1,20000]]},{"name":"xmember_F","dimensions":[0.34,0.66,0.08],"local_position":[1.18,0,0.17],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1000],[0.003,5000],[0.005,12000],[0.008,25000],[0.01,35000],[0.015,50000],[0.02,60000],[0.05,70000],[0.1,80000]],"unload_curve":[[0,0],[0.001,250],[0.003,1250],[0.005,3000],[0.008,6250],[0.01,8750],[0.015,12500],[0.02,15000],[0.05,17500],[0.1,20000]]},{"name":"xmember_R","dimensions":[0.34,0.66,0.08],"local_position":[-1.18,0,0.17],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1000],[0.003,5000],[0.005,12000],[0.008,25000],[0.01,35000],[0.015,50000],[0.02,60000],[0.05,70000],[0.1,80000]],"unload_curve":[[0,0],[0.001,250],[0.003,1250],[0.005,3000],[0.008,6250],[0.01,8750],[0.015,12500],[0.02,15000],[0.05,17500],[0.1,20000]]},{"name":"a_pillar_L","dimensions":[0.32,0.08,0.34],"local_position":[0.04,0.79,0.97],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1000],[0.003,5000],[0.005,12000],[0.008,25000],[0.01,35000],[0.015,50000],[0.02,60000],[0.05,70000],[0.1,80000]],"unload_curve":[[0,0],[0.001,250],[0.003,1250],[0.005,3000],[0.008,6250],[0.01,8750],[0.015,12500],[0.02,15000],[0.05,17500],[0.1,20000]]},{"name":"a_pillar_R","dimensions":[0.32,0.08,0.34],"local_position":[0.04,-0.79,0.97],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1000],[0.003,5000],[0.005,12000],[0.008,25000],[0.01,35000],[0.015,50000],[0.02,60000],[0.05,70000],[0.1,80000]],"unload_curve":[[0,0],[0.001,250],[0.003,1250],[0.005,3000],[0.008,6250],[0.01,8750],[0.015,12500],[0.02,15000],[0.05,17500],[0.1,20000]]},{"name":"scuttle","dimensions":[0.14,0.78,0.09],"local_position":[0.5,0,0.71],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1000],[0.003,5000],[0.005,12000],[0.008,25000],[0.01,35000],[0.015,50000],[0.02,60000],[0.05,70000],[0.1,80000]],"unload_curve":[[0,0],[0.001,250],[0.003,1250],[0.005,3000],[0.008,6250],[0.01,8750],[0.015,12500],[0.02,15000],[0.05,17500],[0.1,20000]]}]},"front_bumper":{"mass":12,"inertia":[2.7536,0.272,2.6384,0,0,0],"center_of_mass":[1.88,0,0.44],"ellipsoids":[{"name":"front_upper","dimensions":[0.13,0.76,0.11],"local_position":[1.86,0,0.65],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,400],[0.003,2000],[0.006,6000],[0.01,12000],[0.015,17000],[0.02,18000],[0.025,16000],[0.04,12000],[0.1,12000]],"unload_curve":[[0,0],[0.001,80],[0.003,400],[0.006,1200],[0.01,2400],[0.015,3400],[0.02,3600],[0.025,3200],[0.04,2400],[0.1,2400]]},{"name":"bumper_mid","dimensions":[0.13,0.78,0.22],"local_position":[1.88,0,0.48],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,750],[0.01,2200],[0.02,6000],[0.03,14000],[0.035,22000],[0.04,28000],[0.06,38000],[0.1,55000]],"unload_curve":[[0,0],[0.005,150],[0.01,440],[0.02,1200],[0.03,2800],[0.035,4400],[0.04,5600],[0.06,7600],[0.1,11000]]},{"name":"bumper_low","dimensions":[0.11,0.72,0.14],"local_position":[1.87,0,0.29],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,750],[0.01,2200],[0.02,6000],[0.03,14000],[0.035,22000],[0.04,28000],[0.06,38000],[0.1,55000]],"unload_curve":[[0,0],[0.005,150],[0.01,440],[0.02,1200],[0.03,2800],[0.035,4400],[0.04,5600],[0.06,7600],[0.1,11000]]},{"name":"grille","dimensions":[0.06,0.46,0.13],"local_position":[1.9,0,0.53],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,400],[0.003,2000],[0.006,6000],[0.01,12000],[0.015,17000],[0.02,18000],[0.025,16000],[0.04,12000],[0.1,12000]],"unload_curve":[[0,0],[0.001,80],[0.003,400],[0.006,1200],[0.01,2400],[0.015,3400],[0.02,3600],[0.025,3200],[0.04,2400],[0.1,2400]]},{"name":"airdam","dimensions":[0.09,0.62,0.07],"local_position":[1.88,0,0.22],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,750],[0.01,2200],[0.02,6000],[0.03,14000],[0.035,22000],[0.04,28000],[0.06,38000],[0.1,55000]],"unload_curve":[[0,0],[0.005,150],[0.01,440],[0.02,1200],[0.03,2800],[0.035,4400],[0.04,5600],[0.06,7600],[0.1,11000]]},{"name":"headlight_L","dimensions":[0.17,0.23,0.13],"local_position":[1.82,0.54,0.63],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,400],[0.003,2000],[0.006,6000],[0.01,12000],[0.015,17000],[0.02,18000],[0.025,16000],[0.04,12000],[0.1,12000]],"unload_curve":[[0,0],[0.001,80],[0.003,400],[0.006,1200],[0.01,2400],[0.015,3400],[0.02,3600],[0.025,3200],[0.04,2400],[0.1,2400]]},{"name":"fog_L","dimensions":[0.09,0.15,0.09],"local_position":[1.84,0.48,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,750],[0.01,2200],[0.02,6000],[0.03,14000],[0.035,22000],[0.04,28000],[0.06,38000],[0.1,55000]],"unload_curve":[[0,0],[0.005,150],[0.01,440],[0.02,1200],[0.03,2800],[0.035,4400],[0.04,5600],[0.06,7600],[0.1,11000]]},{"name":"front_corner_L","dimensions":[0.15,0.1,0.26],"local_position":[1.82,0.78,0.44],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,750],[0.01,2200],[0.02,6000],[0.03,14000],[0.035,22000],[0.04,28000],[0.06,38000],[0.1,55000]],"unload_curve":[[0,0],[0.005,150],[0.01,440],[0.02,1200],[0.03,2800],[0.035,4400],[0.04,5600],[0.06,7600],[0.1,11000]]},{"name":"headlight_R","dimensions":[0.17,0.23,0.13],"local_position":[1.82,-0.54,0.63],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,400],[0.003,2000],[0.006,6000],[0.01,12000],[0.015,17000],[0.02,18000],[0.025,16000],[0.04,12000],[0.1,12000]],"unload_curve":[[0,0],[0.001,80],[0.003,400],[0.006,1200],[0.01,2400],[0.015,3400],[0.02,3600],[0.025,3200],[0.04,2400],[0.1,2400]]},{"name":"fog_R","dimensions":[0.09,0.15,0.09],"local_position":[1.84,-0.48,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,750],[0.01,2200],[0.02,6000],[0.03,14000],[0.035,22000],[0.04,28000],[0.06,38000],[0.1,55000]],"unload_curve":[[0,0],[0.005,150],[0.01,440],[0.02,1200],[0.03,2800],[0.035,4400],[0.04,5600],[0.06,7600],[0.1,11000]]},{"name":"front_corner_R","dimensions":[0.15,0.1,0.26],"local_position":[1.82,-0.78,0.44],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,750],[0.01,2200],[0.02,6000],[0.03,14000],[0.035,22000],[0.04,28000],[0.06,38000],[0.1,55000]],"unload_curve":[[0,0],[0.005,150],[0.01,440],[0.02,1200],[0.03,2800],[0.035,4400],[0.04,5600],[0.06,7600],[0.1,11000]]}]},"bonnet":{"mass":14,"inertia":[2.9867,1.9717,4.9583,0,0,0],"center_of_mass":[1.08,0,0.7],"ellipsoids":[{"name":"bonnet_rear","dimensions":[0.3,0.8,0.11],"local_position":[0.68,0,0.69],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,200],[0.005,800],[0.008,2000],[0.012,4200],[0.015,6000],[0.018,7000],[0.02,6500],[0.025,4000],[0.03,2000],[0.04,800],[0.06,400],[0.1,400]],"unload_curve":[[0,0],[0.002,50],[0.005,200],[0.008,500],[0.012,1050],[0.015,1500],[0.018,1750],[0.02,1625],[0.025,1000],[0.03,500],[0.04,200],[0.06,100],[0.1,100]]},{"name":"bonnet_main","dimensions":[0.76,0.8,0.11],"local_position":[1.08,0,0.7],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,200],[0.005,800],[0.008,2000],[0.012,4200],[0.015,6000],[0.018,7000],[0.02,6500],[0.025,4000],[0.03,2000],[0.04,800],[0.06,400],[0.1,400]],"unload_curve":[[0,0],[0.002,50],[0.005,200],[0.008,500],[0.012,1050],[0.015,1500],[0.018,1750],[0.02,1625],[0.025,1000],[0.03,500],[0.04,200],[0.06,100],[0.1,100]]},{"name":"bonnet_front","dimensions":[0.28,0.76,0.1],"local_position":[1.58,0,0.63],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,400],[0.003,2000],[0.006,6000],[0.01,12000],[0.015,17000],[0.02,18000],[0.025,16000],[0.04,12000],[0.1,12000]],"unload_curve":[[0,0],[0.001,80],[0.003,400],[0.006,1200],[0.01,2400],[0.015,3400],[0.02,3600],[0.025,3200],[0.04,2400],[0.1,2400]]},{"name":"bonnet_nose","dimensions":[0.08,0.7,0.09],"local_position":[1.74,0,0.6],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,400],[0.003,2000],[0.006,6000],[0.01,12000],[0.015,17000],[0.02,18000],[0.025,16000],[0.04,12000],[0.1,12000]],"unload_curve":[[0,0],[0.001,80],[0.003,400],[0.006,1200],[0.01,2400],[0.015,3400],[0.02,3600],[0.025,3200],[0.04,2400],[0.1,2400]]}]},"front_fenders":{"mass":8,"inertia":[2.295,1.635,3.66,0,0,0],"center_of_mass":[1.1,0,0.65],"ellipsoids":[{"name":"fender_top_L","dimensions":[0.86,0.13,0.1],"local_position":[1.05,0.84,0.7],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3000],[0.012,6000],[0.016,9000],[0.02,10500],[0.025,9000],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,750],[0.012,1500],[0.016,2250],[0.02,2625],[0.025,2250],[0.04,1250],[0.1,750]]},{"name":"fender_side_L","dimensions":[0.58,0.1,0.26],"local_position":[1.22,0.88,0.54],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3000],[0.012,6000],[0.016,9000],[0.02,10500],[0.025,9000],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,750],[0.012,1500],[0.016,2250],[0.02,2625],[0.025,2250],[0.04,1250],[0.1,750]]},{"name":"arch_FL","dimensions":[0.44,0.185,0.28],"local_position":[1.35,0.8,0.41000000000000003],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3000],[0.012,6000],[0.016,9000],[0.02,10500],[0.025,9000],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,750],[0.012,1500],[0.016,2250],[0.02,2625],[0.025,2250],[0.04,1250],[0.1,750]]},{"name":"fender_top_R","dimensions":[0.86,0.13,0.1],"local_position":[1.05,-0.84,0.7],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3000],[0.012,6000],[0.016,9000],[0.02,10500],[0.025,9000],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,750],[0.012,1500],[0.016,2250],[0.02,2625],[0.025,2250],[0.04,1250],[0.1,750]]},{"name":"fender_side_R","dimensions":[0.58,0.1,0.26],"local_position":[1.22,-0.88,0.54],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3000],[0.012,6000],[0.016,9000],[0.02,10500],[0.025,9000],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,750],[0.012,1500],[0.016,2250],[0.02,2625],[0.025,2250],[0.04,1250],[0.1,750]]},{"name":"arch_FR","dimensions":[0.44,0.185,0.28],"local_position":[1.35,-0.8,0.41000000000000003],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3000],[0.012,6000],[0.016,9000],[0.02,10500],[0.025,9000],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,750],[0.012,1500],[0.016,2250],[0.02,2625],[0.025,2250],[0.04,1250],[0.1,750]]}]},"windscreen":{"mass":12,"inertia":[2.3104,1.44,3.7504,0,0,0],"center_of_mass":[0.4,0,0.97],"ellipsoids":[{"name":"ws_base","dimensions":[0.15,0.76,0.17],"local_position":[0.5,0,0.82],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,1200],[0.004,3500],[0.006,6500],[0.008,9500],[0.01,12500],[0.012,14500],[0.013,15000],[0.0131,800],[0.02,800],[0.05,800],[0.1,800]],"unload_curve":[[0,0],[0.002,300],[0.004,875],[0.006,1625],[0.008,2375],[0.01,3125],[0.012,3625],[0.013,200],[0.02,200],[0.05,200]]},{"name":"ws_mid","dimensions":[0.2,0.76,0.22],"local_position":[0.4,0,0.97],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,1200],[0.004,3500],[0.006,6500],[0.008,9500],[0.01,12500],[0.012,14500],[0.013,15000],[0.0131,800],[0.02,800],[0.05,800],[0.1,800]],"unload_curve":[[0,0],[0.002,300],[0.004,875],[0.006,1625],[0.008,2375],[0.01,3125],[0.012,3625],[0.013,200],[0.02,200],[0.05,200]]},{"name":"ws_top","dimensions":[0.17,0.76,0.18],"local_position":[0.35,0,1.12],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,1200],[0.004,3500],[0.006,6500],[0.008,9500],[0.01,12500],[0.012,14500],[0.013,15000],[0.0131,800],[0.02,800],[0.05,800],[0.1,800]],"unload_curve":[[0,0],[0.002,300],[0.004,875],[0.006,1625],[0.008,2375],[0.01,3125],[0.012,3625],[0.013,200],[0.02,200],[0.05,200]]}]},"roof":{"mass":15,"inertia":[3.042,1.5125,4.5545,0,0,0],"center_of_mass":[-0.28,0,1.38],"ellipsoids":[{"name":"roof_front","dimensions":[0.26,0.78,0.07],"local_position":[0.15,0,1.3],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3500],[0.012,7000],[0.016,11000],[0.02,13000],[0.025,12000],[0.04,8000],[0.1,5000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,875],[0.012,1750],[0.016,2750],[0.02,3250],[0.025,3000],[0.04,2000],[0.1,1250]]},{"name":"roof_mid","dimensions":[0.54,0.78,0.08],"local_position":[-0.3,0,1.35],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3500],[0.012,7000],[0.016,11000],[0.02,13000],[0.025,12000],[0.04,8000],[0.1,5000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,875],[0.012,1750],[0.016,2750],[0.02,3250],[0.025,3000],[0.04,2000],[0.1,1250]]},{"name":"roof_rear","dimensions":[0.3,0.76,0.07],"local_position":[-0.68,0,1.3],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3500],[0.012,7000],[0.016,11000],[0.02,13000],[0.025,12000],[0.04,8000],[0.1,5000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,875],[0.012,1750],[0.016,2750],[0.02,3250],[0.025,3000],[0.04,2000],[0.1,1250]]}]},"doors":{"mass":80,"inertia":[27,47.0667,63.2667,0,0,0],"center_of_mass":[-0.33,0,0.9],"ellipsoids":[{"name":"door_front_L","dimensions":[0.6,0.1,0.48],"local_position":[0,0.88,0.72],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,250],[0.005,1000],[0.008,2500],[0.012,5000],[0.016,8000],[0.02,9500],[0.025,8500],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,60],[0.005,250],[0.008,625],[0.012,1250],[0.016,2000],[0.02,2375],[0.025,2125],[0.04,1250],[0.1,750]]},{"name":"door_rear_L","dimensions":[0.54,0.1,0.46],"local_position":[-0.66,0.88,0.7],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,250],[0.005,1000],[0.008,2500],[0.012,5000],[0.016,8000],[0.02,9500],[0.025,8500],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,60],[0.005,250],[0.008,625],[0.012,1250],[0.016,2000],[0.02,2375],[0.025,2125],[0.04,1250],[0.1,750]]},{"name":"win_front_L","dimensions":[0.5,0.08,0.26],"local_position":[-0.01,0.83,1.06],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,800],[0.003,3500],[0.005,7500],[0.007,10000],[0.008,11000],[0.0085,500],[0.02,500],[0.05,500],[0.1,500]],"unload_curve":[[0,0],[0.001,200],[0.003,875],[0.005,1875],[0.007,2500],[0.008,125],[0.02,125],[0.05,125],[0.1,125]]},{"name":"win_rear_L","dimensions":[0.46,0.08,0.24],"local_position":[-0.66,0.83,1.04],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,800],[0.003,3500],[0.005,7500],[0.007,10000],[0.008,11000],[0.0085,500],[0.02,500],[0.05,500],[0.1,500]],"unload_curve":[[0,0],[0.001,200],[0.003,875],[0.005,1875],[0.007,2500],[0.008,125],[0.02,125],[0.05,125],[0.1,125]]},{"name":"door_front_R","dimensions":[0.6,0.1,0.48],"local_position":[0,-0.88,0.72],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,250],[0.005,1000],[0.008,2500],[0.012,5000],[0.016,8000],[0.02,9500],[0.025,8500],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,60],[0.005,250],[0.008,625],[0.012,1250],[0.016,2000],[0.02,2375],[0.025,2125],[0.04,1250],[0.1,750]]},{"name":"door_rear_R","dimensions":[0.54,0.1,0.46],"local_position":[-0.66,-0.88,0.7],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,250],[0.005,1000],[0.008,2500],[0.012,5000],[0.016,8000],[0.02,9500],[0.025,8500],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,60],[0.005,250],[0.008,625],[0.012,1250],[0.016,2000],[0.02,2375],[0.025,2125],[0.04,1250],[0.1,750]]},{"name":"win_front_R","dimensions":[0.5,0.08,0.26],"local_position":[-0.01,-0.83,1.06],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,800],[0.003,3500],[0.005,7500],[0.007,10000],[0.008,11000],[0.0085,500],[0.02,500],[0.05,500],[0.1,500]],"unload_curve":[[0,0],[0.001,200],[0.003,875],[0.005,1875],[0.007,2500],[0.008,125],[0.02,125],[0.05,125],[0.1,125]]},{"name":"win_rear_R","dimensions":[0.46,0.08,0.24],"local_position":[-0.66,-0.83,1.04],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,800],[0.003,3500],[0.005,7500],[0.007,10000],[0.008,11000],[0.0085,500],[0.02,500],[0.05,500],[0.1,500]],"unload_curve":[[0,0],[0.001,200],[0.003,875],[0.005,1875],[0.007,2500],[0.008,125],[0.02,125],[0.05,125],[0.1,125]]},{"name":"arch_RL","dimensions":[0.44,0.185,0.28],"local_position":[-1.35,0.8,0.41000000000000003],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3000],[0.012,6000],[0.016,9000],[0.02,10500],[0.025,9000],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,750],[0.012,1500],[0.016,2250],[0.02,2625],[0.025,2250],[0.04,1250],[0.1,750]]},{"name":"arch_RR","dimensions":[0.44,0.185,0.28],"local_position":[-1.35,-0.8,0.41000000000000003],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3000],[0.012,6000],[0.016,9000],[0.02,10500],[0.025,9000],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,750],[0.012,1500],[0.016,2250],[0.02,2625],[0.025,2250],[0.04,1250],[0.1,750]]},{"name":"rear_arch_L","dimensions":[0.42,0.12,0.26],"local_position":[-1.35,0.8,0.6],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3000],[0.012,6000],[0.016,9000],[0.02,10500],[0.025,9000],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,750],[0.012,1500],[0.016,2250],[0.02,2625],[0.025,2250],[0.04,1250],[0.1,750]]},{"name":"rear_arch_R","dimensions":[0.42,0.12,0.26],"local_position":[-1.35,-0.8,0.6],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,300],[0.005,1200],[0.008,3000],[0.012,6000],[0.016,9000],[0.02,10500],[0.025,9000],[0.04,5000],[0.1,3000]],"unload_curve":[[0,0],[0.002,75],[0.005,300],[0.008,750],[0.012,1500],[0.016,2250],[0.02,2625],[0.025,2250],[0.04,1250],[0.1,750]]}]},"rear_screen":{"mass":9,"inertia":[1.5552,0.9075,2.4627,0,0,0],"center_of_mass":[-1.05,0,1.05],"ellipsoids":[{"name":"rear_screen_top","dimensions":[0.21,0.72,0.21],"local_position":[-1,0,1.1],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,1200],[0.004,3500],[0.006,6500],[0.008,9500],[0.01,12500],[0.012,14500],[0.013,15000],[0.0131,800],[0.02,800],[0.05,800],[0.1,800]],"unload_curve":[[0,0],[0.002,300],[0.004,875],[0.006,1625],[0.008,2375],[0.01,3125],[0.012,3625],[0.013,200],[0.02,200],[0.05,200]]},{"name":"rear_screen_bot","dimensions":[0.2,0.72,0.21],"local_position":[-1.1,0,0.98],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,1200],[0.004,3500],[0.006,6500],[0.008,9500],[0.01,12500],[0.012,14500],[0.013,15000],[0.0131,800],[0.02,800],[0.05,800],[0.1,800]],"unload_curve":[[0,0],[0.002,300],[0.004,875],[0.006,1625],[0.008,2375],[0.01,3125],[0.012,3625],[0.013,200],[0.02,200],[0.05,200]]}]},"boot_lid":{"mass":12,"inertia":[2.56,0.81,3.37,0,0,0],"center_of_mass":[-1.65,0,0.76],"ellipsoids":[{"name":"boot_top","dimensions":[0.5,0.78,0.11],"local_position":[-1.5,0,0.81],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,200],[0.005,800],[0.008,2000],[0.012,4200],[0.015,6000],[0.018,7000],[0.02,6500],[0.025,4000],[0.03,2000],[0.04,800],[0.06,400],[0.1,400]],"unload_curve":[[0,0],[0.002,50],[0.005,200],[0.008,500],[0.012,1050],[0.015,1500],[0.018,1750],[0.02,1625],[0.025,1000],[0.03,500],[0.04,200],[0.06,100],[0.1,100]]},{"name":"boot_lower","dimensions":[0.26,0.78,0.13],"local_position":[-1.8,0,0.71],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.002,200],[0.005,800],[0.008,2000],[0.012,4200],[0.015,6000],[0.018,7000],[0.02,6500],[0.025,4000],[0.03,2000],[0.04,800],[0.06,400],[0.1,400]],"unload_curve":[[0,0],[0.002,50],[0.005,200],[0.008,500],[0.012,1050],[0.015,1500],[0.018,1750],[0.02,1625],[0.025,1000],[0.03,500],[0.04,200],[0.06,100],[0.1,100]]},{"name":"rear_upper","dimensions":[0.11,0.76,0.14],"local_position":[-1.86,0,0.67],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,400],[0.003,2000],[0.006,6000],[0.01,12000],[0.015,17000],[0.02,18000],[0.025,16000],[0.04,12000],[0.1,12000]],"unload_curve":[[0,0],[0.001,80],[0.003,400],[0.006,1200],[0.01,2400],[0.015,3400],[0.02,3600],[0.025,3200],[0.04,2400],[0.1,2400]]},{"name":"tail_light_L","dimensions":[0.12,0.25,0.2],"local_position":[-1.9,0.58,0.67],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,400],[0.003,2000],[0.006,6000],[0.01,12000],[0.015,17000],[0.02,18000],[0.025,16000],[0.04,12000],[0.1,12000]],"unload_curve":[[0,0],[0.001,80],[0.003,400],[0.006,1200],[0.01,2400],[0.015,3400],[0.02,3600],[0.025,3200],[0.04,2400],[0.1,2400]]},{"name":"tail_light_R","dimensions":[0.12,0.25,0.2],"local_position":[-1.9,-0.58,0.67],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,400],[0.003,2000],[0.006,6000],[0.01,12000],[0.015,17000],[0.02,18000],[0.025,16000],[0.04,12000],[0.1,12000]],"unload_curve":[[0,0],[0.001,80],[0.003,400],[0.006,1200],[0.01,2400],[0.015,3400],[0.02,3600],[0.025,3200],[0.04,2400],[0.1,2400]]}]},"rear_bumper":{"mass":10,"inertia":[2.2947,0.2093,2.1813,0,0,0],"center_of_mass":[-1.88,0,0.36],"ellipsoids":[{"name":"rear_bumper","dimensions":[0.12,0.78,0.22],"local_position":[-1.88,0,0.45],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,900],[0.01,2800],[0.02,7500],[0.03,17000],[0.035,26000],[0.04,32000],[0.06,44000],[0.1,60000]],"unload_curve":[[0,0],[0.005,180],[0.01,560],[0.02,1500],[0.03,3400],[0.035,5200],[0.04,6400],[0.06,8800],[0.1,12000]]},{"name":"rear_lower","dimensions":[0.1,0.7,0.14],"local_position":[-1.87,0,0.27],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,900],[0.01,2800],[0.02,7500],[0.03,17000],[0.035,26000],[0.04,32000],[0.06,44000],[0.1,60000]],"unload_curve":[[0,0],[0.005,180],[0.01,560],[0.02,1500],[0.03,3400],[0.035,5200],[0.04,6400],[0.06,8800],[0.1,12000]]},{"name":"rear_diffuser","dimensions":[0.08,0.56,0.06],"local_position":[-1.9,0,0.17],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,900],[0.01,2800],[0.02,7500],[0.03,17000],[0.035,26000],[0.04,32000],[0.06,44000],[0.1,60000]],"unload_curve":[[0,0],[0.005,180],[0.01,560],[0.02,1500],[0.03,3400],[0.035,5200],[0.04,6400],[0.06,8800],[0.1,12000]]},{"name":"rear_corner_L","dimensions":[0.12,0.1,0.24],"local_position":[-1.86,0.78,0.48],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,900],[0.01,2800],[0.02,7500],[0.03,17000],[0.035,26000],[0.04,32000],[0.06,44000],[0.1,60000]],"unload_curve":[[0,0],[0.005,180],[0.01,560],[0.02,1500],[0.03,3400],[0.035,5200],[0.04,6400],[0.06,8800],[0.1,12000]]},{"name":"rear_corner_R","dimensions":[0.12,0.1,0.24],"local_position":[-1.86,-0.78,0.48],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,900],[0.01,2800],[0.02,7500],[0.03,17000],[0.035,26000],[0.04,32000],[0.06,44000],[0.1,60000]],"unload_curve":[[0,0],[0.005,180],[0.01,560],[0.02,1500],[0.03,3400],[0.035,5200],[0.04,6400],[0.06,8800],[0.1,12000]]}]},"wheels_front":{"mass":40,"inertia":[0.9594,1.7424,0.9594,0,0,0],"center_of_mass":[1.35,0,0.33],"ellipsoids":[{"name":"tyre_FL","dimensions":[0.33,0.105,0.33],"local_position":[1.35,0.8,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,600],[0.01,1800],[0.02,5000],[0.03,10000],[0.04,16000],[0.05,22000],[0.08,35000],[0.1,42000]],"unload_curve":[[0,0],[0.005,150],[0.01,450],[0.02,1250],[0.03,2500],[0.04,4000],[0.05,5500],[0.08,8750],[0.1,10500]]},{"name":"rim_FL","dimensions":[0.07,0.07,0.2442],"local_position":[1.35,0.8,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1500],[0.003,6000],[0.005,15000],[0.008,30000],[0.01,42000],[0.02,60000],[0.05,80000],[0.1,100000]],"unload_curve":[[0,0],[0.001,375],[0.003,1500],[0.005,3750],[0.008,7500],[0.01,10500],[0.02,15000],[0.05,20000],[0.1,25000]]},{"name":"hub_FL","dimensions":[0.04,0.04,0.1386],"local_position":[1.35,0.8,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1500],[0.003,6000],[0.005,15000],[0.008,30000],[0.01,42000],[0.02,60000],[0.05,80000],[0.1,100000]],"unload_curve":[[0,0],[0.001,375],[0.003,1500],[0.005,3750],[0.008,7500],[0.01,10500],[0.02,15000],[0.05,20000],[0.1,25000]]},{"name":"tyre_FR","dimensions":[0.33,0.105,0.33],"local_position":[1.35,-0.8,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,600],[0.01,1800],[0.02,5000],[0.03,10000],[0.04,16000],[0.05,22000],[0.08,35000],[0.1,42000]],"unload_curve":[[0,0],[0.005,150],[0.01,450],[0.02,1250],[0.03,2500],[0.04,4000],[0.05,5500],[0.08,8750],[0.1,10500]]},{"name":"rim_FR","dimensions":[0.07,0.07,0.2442],"local_position":[1.35,-0.8,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1500],[0.003,6000],[0.005,15000],[0.008,30000],[0.01,42000],[0.02,60000],[0.05,80000],[0.1,100000]],"unload_curve":[[0,0],[0.001,375],[0.003,1500],[0.005,3750],[0.008,7500],[0.01,10500],[0.02,15000],[0.05,20000],[0.1,25000]]},{"name":"hub_FR","dimensions":[0.04,0.04,0.1386],"local_position":[1.35,-0.8,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1500],[0.003,6000],[0.005,15000],[0.008,30000],[0.01,42000],[0.02,60000],[0.05,80000],[0.1,100000]],"unload_curve":[[0,0],[0.001,375],[0.003,1500],[0.005,3750],[0.008,7500],[0.01,10500],[0.02,15000],[0.05,20000],[0.1,25000]]}]},"wheels_rear":{"mass":40,"inertia":[0.9594,1.7424,0.9594,0,0,0],"center_of_mass":[-1.35,0,0.33],"ellipsoids":[{"name":"tyre_RL","dimensions":[0.33,0.105,0.33],"local_position":[-1.35,0.8,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,600],[0.01,1800],[0.02,5000],[0.03,10000],[0.04,16000],[0.05,22000],[0.08,35000],[0.1,42000]],"unload_curve":[[0,0],[0.005,150],[0.01,450],[0.02,1250],[0.03,2500],[0.04,4000],[0.05,5500],[0.08,8750],[0.1,10500]]},{"name":"rim_RL","dimensions":[0.07,0.07,0.2442],"local_position":[-1.35,0.8,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1500],[0.003,6000],[0.005,15000],[0.008,30000],[0.01,42000],[0.02,60000],[0.05,80000],[0.1,100000]],"unload_curve":[[0,0],[0.001,375],[0.003,1500],[0.005,3750],[0.008,7500],[0.01,10500],[0.02,15000],[0.05,20000],[0.1,25000]]},{"name":"hub_RL","dimensions":[0.04,0.04,0.1386],"local_position":[-1.35,0.8,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1500],[0.003,6000],[0.005,15000],[0.008,30000],[0.01,42000],[0.02,60000],[0.05,80000],[0.1,100000]],"unload_curve":[[0,0],[0.001,375],[0.003,1500],[0.005,3750],[0.008,7500],[0.01,10500],[0.02,15000],[0.05,20000],[0.1,25000]]},{"name":"tyre_RR","dimensions":[0.33,0.105,0.33],"local_position":[-1.35,-0.8,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.005,600],[0.01,1800],[0.02,5000],[0.03,10000],[0.04,16000],[0.05,22000],[0.08,35000],[0.1,42000]],"unload_curve":[[0,0],[0.005,150],[0.01,450],[0.02,1250],[0.03,2500],[0.04,4000],[0.05,5500],[0.08,8750],[0.1,10500]]},{"name":"rim_RR","dimensions":[0.07,0.07,0.2442],"local_position":[-1.35,-0.8,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1500],[0.003,6000],[0.005,15000],[0.008,30000],[0.01,42000],[0.02,60000],[0.05,80000],[0.1,100000]],"unload_curve":[[0,0],[0.001,375],[0.003,1500],[0.005,3750],[0.008,7500],[0.01,10500],[0.02,15000],[0.05,20000],[0.1,25000]]},{"name":"hub_RR","dimensions":[0.04,0.04,0.1386],"local_position":[-1.35,-0.8,0.33],"local_orientation":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"force_curve":[[0,0],[0.001,1500],[0.003,6000],[0.005,15000],[0.008,30000],[0.01,42000],[0.02,60000],[0.05,80000],[0.1,100000]],"unload_curve":[[0,0],[0.001,375],[0.003,1500],[0.005,3750],[0.008,7500],[0.01,10500],[0.02,15000],[0.05,20000],[0.1,25000]]}]}},"joints":[{"name":"car_free_jnt","type":"free","parent":"GROUND","child":"car_body","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"initial_velocity":[13.9,0,0]},{"name":"front_bumper_jnt","type":"fixed","parent":"car_body","child":"front_bumper","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},{"name":"bonnet_jnt","type":"fixed","parent":"car_body","child":"bonnet","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},{"name":"front_fenders_jnt","type":"fixed","parent":"car_body","child":"front_fenders","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},{"name":"windscreen_jnt","type":"fixed","parent":"car_body","child":"windscreen","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},{"name":"roof_jnt","type":"fixed","parent":"car_body","child":"roof","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},{"name":"doors_jnt","type":"fixed","parent":"car_body","child":"doors","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},{"name":"rear_screen_jnt","type":"fixed","parent":"car_body","child":"rear_screen","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},{"name":"boot_lid_jnt","type":"fixed","parent":"car_body","child":"boot_lid","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},{"name":"rear_bumper_jnt","type":"fixed","parent":"car_body","child":"rear_bumper","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},{"name":"wheels_front_jnt","type":"fixed","parent":"car_body","child":"wheels_front","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,-0.15],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},{"name":"wheels_rear_jnt","type":"fixed","parent":"car_body","child":"wheels_rear","T1":[[1,0,0,0],[0,1,0,0],[0,0,1,-0.15],[0,0,0,1]],"T2":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],"T2_inv":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}],"metadata":{"name":"OpenMBD Car Model","version":"1.0.0","description":"Multi-rigid-body car model for pedestrian impact simulation.","license":"MIT License","contact":"Dr Gregory Tierney (g.tierney@ulster.ac.uk)"}}</script>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════
+const MAX_MODELS = 3;                                   // SimulationCreatorTab._MAX_MODELS
+const MODEL_LABELS = ['Model A', 'Model B', 'Model C'];  // _MODEL_LABELS
+const MODEL_COLORS = ['#309aa6', '#c238c2', '#a69e30'];  // muted cyan/magenta/yellow — same hue family as Tab 1's _MODEL_COLOURS, toned down for the 3D preview
+const MODEL_COLORS_THREE = [0x309aa6, 0xc238c2, 0xa69e30];
+
+const JOINT_FRIENDLY = {
+  root_joint: 'Root (free joint)',
+  anklelJnt: 'Left Ankle', anklerJnt: 'Right Ankle',
+  elbowlJnt: 'Left Elbow', elbowrJnt: 'Right Elbow',
+  headJnt: 'Head',
+  hiplJnt: 'Left Hip', hiprJnt: 'Right Hip',
+  kneelJnt: 'Left Knee', kneerJnt: 'Right Knee',
+  lowerbackJnt: 'Lower Back', upperbackJnt: 'Upper Back',
+  neckJnt: 'Neck',
+  shoulderlJnt: 'Left Shoulder', shoulderrJnt: 'Right Shoulder',
+  wristlJnt: 'Left Wrist', wristrJnt: 'Right Wrist',
+};
+function friendlyJointName(j) { return JOINT_FRIENDLY[j] || j; }
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+                  .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escHtml(s) { return escAttr(s); }
+
+// Bundled model data, decoded from the inert <script type="application/json"> blocks above.
+const EMBEDDED_MODELS = {};
+function loadEmbedded(id, fname) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  try { EMBEDDED_MODELS[fname] = JSON.parse(el.textContent); }
+  catch (e) { console.error('Failed to parse embedded model', fname, e); }
+}
+// Filename-keyed cache of anything the person supplies via "Browse" — our
+// stand-in for the local filesystem Tab 1 reads from directly.
+const uploadedModelData = {};
+
+// ═══════════════════════════════════════════════════════════════════════
+// 4×4 MATRIX / FORWARD-KINEMATICS — direct port of geometry_mesh_generator.py
+// rotation_matrix_from_euler_axis() and models_multibody.py's
+// get_joint_rotation_matrix()/_update_body_kinematics(), so a given pose here
+// produces the exact same body transforms Tab 1 would compute.
+// ═══════════════════════════════════════════════════════════════════════
+function mat4Identity() { return [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]; }
+function mat4Mul(a, b) {
+  const r = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    let s = 0; for (let k = 0; k < 4; k++) s += a[i][k] * b[k][j];
+    r[i][j] = s;
+  }
+  return r;
+}
+function rotFromEulerAxis(axis, angleDeg) {
+  const rad = angleDeg * Math.PI / 180;
+  const c = Math.cos(rad), s = Math.sin(rad);
+  const R = mat4Identity();
+  if (axis === 'X') { R[1][1]=c; R[1][2]=-s; R[2][1]=s; R[2][2]=c; }
+  else if (axis === 'Y') { R[0][0]=c; R[0][2]=s; R[2][0]=-s; R[2][2]=c; }
+  else if (axis === 'Z') { R[0][0]=c; R[0][1]=-s; R[1][0]=s; R[1][1]=c; }
+  return R;
+}
+function jointRotationMatrix(anglesDeg) {
+  let R = mat4Identity();
+  if (Math.abs(anglesDeg[0]) > 0.01) R = mat4Mul(R, rotFromEulerAxis('Z', anglesDeg[0]));
+  if (Math.abs(anglesDeg[1]) > 0.01) R = mat4Mul(R, rotFromEulerAxis('Y', anglesDeg[1]));
+  if (Math.abs(anglesDeg[2]) > 0.01) R = mat4Mul(R, rotFromEulerAxis('X', anglesDeg[2]));
+  return R;
+}
+function buildRootTransform(rootPos, rootAnglesDeg) {
+  const R = jointRotationMatrix(rootAnglesDeg);
+  const T = mat4Identity();
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) T[i][j] = R[i][j];
+  T[0][3] = rootPos[0]; T[1][3] = rootPos[1]; T[2][3] = rootPos[2];
+  return T;
+}
+function parseVec3(str) {
+  if (!str) return [0, 0, 0];
+  const clean = String(str).replace(/\|/g, ' ').replace(/\n/g, ' ').trim();
+  const parts = clean.split(/\s+/).map(Number);
+  if (parts.length >= 3 && parts.slice(0, 3).every(v => !isNaN(v))) return parts.slice(0, 3);
+  return [0, 0, 0];
+}
+
+// Builds each body's tree once per loaded model (parent/child joint map +
+// root body), mirroring models_multibody.py::_parse_hierarchy at the level
+// this tool needs (geometry + kinematics, not contact/joint-limit metadata).
+function parseModelTree(data) {
+  const bodies = data.bodies || {};
+  const joints = Array.isArray(data.joints) ? data.joints : [];
+  const childrenMap = {};
+  let rootBodyName = null;
+  joints.forEach(j => {
+    if (j.parent === 'GROUND') {
+      if (rootBodyName === null) rootBodyName = j.child;
+    } else if (bodies[j.parent]) {
+      if (!childrenMap[j.parent]) childrenMap[j.parent] = [];
+      childrenMap[j.parent].push(j);
+    }
+  });
+  if (!rootBodyName) rootBodyName = Object.keys(bodies)[0] || null;
+  return { bodies, childrenMap, rootBodyName };
+}
+
+// Replicates SimulationCreatorTab.update_model_ui()'s joint filter exactly:
+// root joint is aliased to 'root_joint', fixed joints are excluded, and only
+// names containing one of the anatomical keywords survive.
+function extractJointList(data) {
+  const joints = Array.isArray(data.joints) ? data.joints : [];
+  const seen = new Set();
+  const display = [];
+  joints.forEach(j => {
+    const isRoot = j.parent === 'GROUND';
+    const jtype = j.type || 'fixed';
+    if (isRoot) {
+      if (!seen.has('root_joint')) { seen.add('root_joint'); display.push('root_joint'); }
+    } else if (jtype === 'fixed') {
+      // excluded, same as Tab 1
+    } else if (j.name && !seen.has(j.name)) {
+      seen.add(j.name); display.push(j.name);
+    }
+  });
+  const keywords = ['head', 'ankle', 'upperback', 'lowerback', 'elbow', 'hip',
+                     'knee', 'lumbar', 'neck', 'shoulder', 'wrist'];
+  let filtered = display.filter(jn => {
+    if (jn === 'root_joint' || jn.startsWith('root_joint_')) return true;
+    const low = jn.toLowerCase();
+    return keywords.some(kw => low.includes(kw));
+  });
+  filtered.sort((a, b) => {
+    const aRoot = a !== 'root_joint', bRoot = b !== 'root_joint';
+    if (aRoot !== bRoot) return aRoot ? 1 : -1;
+    return a < b ? -1 : (a > b ? 1 : 0);
+  });
+  return filtered;
+}
+
+function buildLocalT(ellData) {
+  const lo = ellData.local_orientation;
+  let T;
+  if (lo && lo.length === 4) T = lo.map(row => row.slice());
+  else if (lo && lo.length === 3) {
+    T = mat4Identity();
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) T[i][j] = lo[i][j];
+  } else T = mat4Identity();
+  const lp = ellData.local_position || [0, 0, 0];
+  T[0][3] = lp[0]; T[1][3] = lp[1]; T[2][3] = lp[2];
+  return T;
+}
+
+function computeBodyTransforms(m) {
+  const { bodies, childrenMap, rootBodyName } = m.tree;
+  if (!rootBodyName) return {};
+  const rootPos = parseVec3(m.pos);
+  const rootAngles = (m.joints['root_joint']) || [0, 0, 0];
+  const T_root = buildRootTransform(rootPos, rootAngles);
+  const transforms = {};
+  (function recurse(bodyName, parentT) {
+    transforms[bodyName] = parentT;
+    const kids = childrenMap[bodyName] || [];
+    kids.forEach(j => {
+      const angles = m.joints[j.name] || [0, 0, 0];
+      const R = jointRotationMatrix(angles);
+      let T = mat4Mul(parentT, j.T1);
+      T = mat4Mul(T, R);
+      T = mat4Mul(T, j.T2_inv);
+      recurse(j.child, T);
+    });
+  })(rootBodyName, T_root);
+  return transforms;
+}
+
+// Model-space (X=AP, Y=ML, Z=SI/up) → Three.js scene-space (X=ML, Y=up, Z=AP)
+// remap, identical to the one used in openmbd_model_editor.html so posed
+// bodies line up with that tool's coordinate convention.
+function modelPosToScene(p) { return [p[1], p[2], p[0]]; }
+function modelRot3ToThreeMatrix4(R3) {
+  const R00=R3[0][0],R01=R3[0][1],R02=R3[0][2];
+  const R10=R3[1][0],R11=R3[1][1],R12=R3[1][2];
+  const R20=R3[2][0],R21=R3[2][1],R22=R3[2][2];
+  const m4 = new THREE.Matrix4();
+  m4.set(R11,R12,R10,0,  R21,R22,R20,0,  R01,R02,R00,0,  0,0,0,1);
+  return m4;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════════
+let sim = {
+  dt: '0.0001', out_dt: '0.001', dur: '0.03', cof: '0.4', contact_damping: '150',
+  models: {},
+};
+let selModelId = null;
+
+// Mirrors ModelConfig.__init__ defaults (path/pos/vel), plus is_loaded /
+// tree / knownJoints which Tab 1 derives at runtime from the parsed model.
+function createModel(id, autoLoadMale) {
+  const posX = id === 0 ? '0.0' : (id === 1 ? '1.0' : '2.0');
+  const m = {
+    id,
+    path: 'openmbd_male.json',
+    pos: autoLoadMale ? '0.0 0.0 1.05' : `${posX} 0.0 0.95`,
+    vel: '0.0 0.0 0.0',
+    joints: {}, joint_vels: {}, joint_torques: {},
+    loaded: false,
+    tree: null,
+    knownJoints: [],
+    selectedJoint: null,
+  };
+  if (autoLoadMale && EMBEDDED_MODELS['openmbd_male.json']) {
+    applyLoadedModel(m, EMBEDDED_MODELS['openmbd_male.json']);
+  }
+  return m;
+}
+
+function applyLoadedModel(m, data) {
+  m.tree = parseModelTree(data);
+  m.knownJoints = extractJointList(data);
+  m.loaded = true;
+  if (!m.selectedJoint || !m.knownJoints.includes(m.selectedJoint)) {
+    m.selectedJoint = m.knownJoints[0] || null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MODEL MANAGEMENT — mirrors SimulationCreatorTab._add_model/_remove_model
+// ═══════════════════════════════════════════════════════════════════════
+function addModel() {
+  const ids = Object.keys(sim.models).map(Number);
+  if (ids.length >= MAX_MODELS) return;
+  let mid = 0;
+  while (sim.models[mid] !== undefined) mid++;
+  sim.models[mid] = createModel(mid, false);
+  selModelId = mid;
+  renderAll();
+  buildScene();
+}
+
+function removeSelectedModel() {
+  const mid = selModelId;
+  if (mid === null || sim.models[mid] === undefined) return;
+  if (Object.keys(sim.models).length <= 1) return;
+  if (!confirm(`Remove ${MODEL_LABELS[mid]} from the simulation?`)) return;
+  delete sim.models[mid];
+  const remaining = Object.keys(sim.models).map(Number).sort((a, b) => a - b);
+  selModelId = remaining[0];
+  renderAll();
+  buildScene();
+}
+
+function selectModel(mid) {
+  selModelId = mid;
+  renderAll();
+}
+
+function onPathInputChange(val) {
+  const m = sim.models[selModelId]; if (!m) return;
+  m.path = val;
+}
+
+function browseModelFile() { document.getElementById('model-file-inp').click(); }
+
+function onModelFileLoad(e) {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      uploadedModelData[file.name] = data;
+      const m = sim.models[selModelId];
+      if (m) {
+        m.path = file.name;
+        applyLoadedModel(m, data);
+        renderAll();
+        buildScene();
+      }
+    } catch (err) {
+      alert('Could not parse that model JSON:\n' + err.message);
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+}
+
+function loadModelFromPath() {
+  const m = sim.models[selModelId]; if (!m) return;
+  const fname = String(m.path || '').split(/[\\/]/).pop();
+  const data = uploadedModelData[fname] || EMBEDDED_MODELS[fname];
+  if (!data) {
+    alert(`Could not find "${fname}".\n\nUse Browse to supply this model's JSON file, or type the name of one of the bundled models:\nopenmbd_male.json, openmbd_female.json, openmbd_bicycle.json, openmbd_car.json`);
+    return;
+  }
+  applyLoadedModel(m, data);
+  renderAll();
+  buildScene();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// JOINT SELECTION / AXIS CONTROLS
+// ═══════════════════════════════════════════════════════════════════════
+function onJointSelect(name) {
+  const m = sim.models[selModelId]; if (!m) return;
+  m.selectedJoint = name || null;
+  renderJointControls();
+  updateHud();
+}
+
+function setRootField(field, val) {
+  const m = sim.models[selModelId]; if (!m) return;
+  m[field] = val;
+  if (field === 'pos') updateAllPoses();
+}
+
+function axisRowHTML(kind, labels, min, max, step, unit, values, disabled) {
+  return labels.map((lbl, i) => {
+    const val = (values && values[i] !== undefined) ? values[i] : 0;
+    return `
+    <div class="axis-row ${disabled ? 'disabled' : ''}" data-kind="${kind}" data-axis="${i}">
+      <span class="axis-lbl">${lbl}</span>
+      <input class="axis-num" type="number" step="${step}" value="${val}" oninput="syncAxis(this)" ${disabled ? 'disabled' : ''}>
+      <input class="axis-slider" type="range" min="${min}" max="${max}" step="${step}" value="${val}" oninput="syncAxis(this)" ${disabled ? 'disabled' : ''}>
+      <span class="axis-val">${Number(val).toFixed(2)}${unit}</span>
+    </div>`;
+  }).join('');
+}
+
+function syncAxis(el) {
+  const row = el.closest('.axis-row');
+  const kind = row.dataset.kind;
+  const axis = parseInt(row.dataset.axis, 10);
+  let val = parseFloat(el.value);
+  if (isNaN(val)) val = 0;
+  row.querySelectorAll('input').forEach(inp => { if (inp !== el) inp.value = val; });
+  const unit = kind === 'angle' ? '°' : (kind === 'vel' ? ' rad/s' : ' N·m');
+  row.querySelector('.axis-val').textContent = val.toFixed(2) + unit;
+  applyAxisValue(kind, axis, val);
+}
+
+function applyAxisValue(kind, axis, val) {
+  const m = sim.models[selModelId]; if (!m || !m.selectedJoint) return;
+  const j = m.selectedJoint;
+  if (kind === 'angle') {
+    if (!m.joints[j]) m.joints[j] = [0, 0, 0];
+    m.joints[j][axis] = val;
+    updateAllPoses();
+  } else if (kind === 'vel') {
+    if (!m.joint_vels[j]) m.joint_vels[j] = [0, 0, 0];
+    m.joint_vels[j][axis] = val;
+  } else if (kind === 'torque') {
+    if (!m.joint_torques[j]) m.joint_torques[j] = { torque: [0, 0, 0], t_start: 0.0, duration: 0.1 };
+    m.joint_torques[j].torque[axis] = val;
+  }
+}
+
+function onTorqueTimingInput(el) {
+  const m = sim.models[selModelId]; if (!m || !m.selectedJoint) return;
+  const j = m.selectedJoint;
+  const field = el.dataset.field;
+  let val = parseFloat(el.value);
+  if (isNaN(val)) val = 0;
+  if (!m.joint_torques[j]) m.joint_torques[j] = { torque: [0, 0, 0], t_start: 0.0, duration: 0.1 };
+  m.joint_torques[j][field] = val;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// RENDERING — LEFT PANEL
+// ═══════════════════════════════════════════════════════════════════════
+function renderGlobalParams() {
+  document.getElementById('g-dt').value = sim.dt;
+  document.getElementById('g-outdt').value = sim.out_dt;
+  document.getElementById('g-dur').value = sim.dur;
+  document.getElementById('g-cof').value = sim.cof;
+  document.getElementById('g-damp').value = sim.contact_damping;
+}
+
+function renderModelRadios() {
+  const wrap = document.getElementById('model-radio-row');
+  const ids = Object.keys(sim.models).map(Number).sort((a, b) => a - b);
+  wrap.innerHTML = ids.map(mid => {
+    const m = sim.models[mid];
+    const isSel = mid === selModelId;
+    return `<div class="radio-pill ${isSel ? 'sel' : ''}" onclick="selectModel(${mid})">
+      <span class="radio-dot" style="background:${MODEL_COLORS[mid]}"></span>
+      ${MODEL_LABELS[mid]}
+      ${!m.loaded ? '<span class="unloaded-tag">unloaded</span>' : ''}
+    </div>`;
+  }).join('');
+  document.getElementById('btn-add-model').disabled = ids.length >= MAX_MODELS;
+  document.getElementById('btn-remove-model').disabled = ids.length <= 1;
+}
+
+function renderModelPathRow() {
+  const m = sim.models[selModelId];
+  document.getElementById('model-path-input').value = m ? m.path : '';
+}
+
+function renderJointConfigTopFields() {
+  const m = sim.models[selModelId];
+  document.getElementById('root-pos-input').value = m ? m.pos : '';
+  document.getElementById('root-vel-input').value = m ? m.vel : '';
+  const sel = document.getElementById('joint-select');
+  if (!m || !m.loaded || !m.knownJoints.length) {
+    sel.innerHTML = `<option value="">— none —</option>`;
+    sel.disabled = true;
+  } else {
+    sel.disabled = false;
+    sel.innerHTML = m.knownJoints.map(j =>
+      `<option value="${escAttr(j)}" ${j === m.selectedJoint ? 'selected' : ''}>${escHtml(friendlyJointName(j))}${j !== 'root_joint' ? ' — ' + escHtml(j) : ''}</option>`
+    ).join('');
+  }
+}
+
+function renderJointControls() {
+  const block = document.getElementById('joint-controls-block');
+  const m = sim.models[selModelId];
+  if (!m || !m.loaded || !m.selectedJoint) {
+    block.innerHTML = `<div class="no-joint-msg">No joint available yet — set <b>Model Path</b> above and click <b>Load</b> (or <b>Browse</b> for a custom model) to populate this list, exactly as in Tab 1.</div>`;
+    return;
+  }
+  const j = m.selectedJoint;
+  const angles = m.joints[j] || [0, 0, 0];
+  const vels = m.joint_vels[j] || [0, 0, 0];
+  const trq = m.joint_torques[j] || { torque: [0, 0, 0], t_start: 0.0, duration: 0.1 };
+  block.innerHTML = `
+    ${axisRowHTML('angle', ['Yaw (Z)', 'Pitch (Y)', 'Roll (X)'], -180, 180, 0.1, '°', angles, false)}
+    <hr class="sep">
+    <div class="section-label">Joint Angular Vel (Z Y X) rad/s:</div>
+    ${axisRowHTML('vel', ['ωZ (rad/s)', 'ωY (rad/s)', 'ωX (rad/s)'], -12, 12, 0.05, ' rad/s', vels, false)}
+    <hr class="sep">
+    <div class="section-label">Joint Torque Pulse (N·m):</div>
+    ${axisRowHTML('torque', ['τZ (N·m)', 'τY (N·m)', 'τX (N·m)'], -500, 500, 1, ' N·m', trq.torque, false)}
+    <div class="timing-row">
+      <span class="field-label">Start (s):</span>
+      <input class="pinput sm" type="number" step="0.001" value="${trq.t_start}" data-field="t_start" oninput="onTorqueTimingInput(this)">
+      <span class="field-label">Dur (s):</span>
+      <input class="pinput sm" type="number" step="0.001" value="${trq.duration}" data-field="duration" oninput="onTorqueTimingInput(this)">
+    </div>
+  `;
+}
+
+function updateStatusBar() {
+  const ids = Object.keys(sim.models).map(Number);
+  document.getElementById('sb-models').textContent = ids.length;
+  document.getElementById('sb-dur').textContent = sim.dur;
+  document.getElementById('sb-dt').textContent = sim.dt;
+}
+
+function updateHud() {
+  const hud = document.getElementById('hud-sel');
+  const m = sim.models[selModelId];
+  if (!m) { hud.innerHTML = '<b>—</b>'; document.getElementById('sb-sel').textContent = '—'; return; }
+  const jointTxt = m.loaded && m.selectedJoint ? friendlyJointName(m.selectedJoint) : (m.loaded ? '(no joints)' : 'not loaded');
+  hud.innerHTML = `<span class="swatch" style="background:${MODEL_COLORS[selModelId]}"></span><b>${MODEL_LABELS[selModelId]}</b> · ${escHtml(jointTxt)}`;
+  document.getElementById('sb-sel').textContent = `${MODEL_LABELS[selModelId]} · ${jointTxt}`;
+}
+
+function renderAll() {
+  renderGlobalParams();
+  renderModelRadios();
+  renderModelPathRow();
+  renderJointConfigTopFields();
+  renderJointControls();
+  updateStatusBar();
+  updateHud();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// EXPORT / IMPORT — schema matches ModelConfig.to_dict() exactly
+// ═══════════════════════════════════════════════════════════════════════
+function buildExportObject() {
+  const modelsArr = Object.keys(sim.models).map(Number).sort((a, b) => a - b).map(mid => {
+    const m = sim.models[mid];
+    return {
+      id: mid,
+      path: m.path,
+      pos: m.pos,
+      vel: m.vel,
+      ang_vel: '0.0 0.0 0.0',
+      joints: m.joints,
+      joint_vels: m.joint_vels,
+      joint_torques: m.joint_torques,
+    };
+  });
+  return {
+    dt: sim.dt, out_dt: sim.out_dt, dur: sim.dur,
+    cof: sim.cof, contact_damping: sim.contact_damping,
+    models: modelsArr,
+  };
+}
+
+function exportConfig() {
+  const obj = buildExportObject();
+  const blob = new Blob([JSON.stringify(obj, null, 4)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'testsim.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function openJsonPreview() {
+  document.getElementById('json-preview-content').textContent = JSON.stringify(buildExportObject(), null, 4);
+  document.getElementById('json-modal-bg').classList.add('open');
+}
+function closeJsonPreview() { document.getElementById('json-modal-bg').classList.remove('open'); }
+document.getElementById('json-modal-bg').addEventListener('click', e => {
+  if (e.target === document.getElementById('json-modal-bg')) closeJsonPreview();
+});
+
+function loadConfigFile() { document.getElementById('config-file-inp').click(); }
+
+function onConfigFileLoad(e) {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try { importConfig(JSON.parse(ev.target.result)); }
+    catch (err) { alert('Could not parse that config JSON:\n' + err.message); }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+}
+
+function importConfig(data) {
+  sim.dt = String(data.dt ?? '0.0001');
+  sim.out_dt = String(data.out_dt ?? '0.001');
+  sim.dur = String(data.dur ?? '0.03');
+  sim.cof = String(data.cof ?? '0.4');
+  sim.contact_damping = String(data.contact_damping ?? '150');
+
+  sim.models = {};
+  const modelsData = Array.isArray(data.models) ? data.models : [];
+  modelsData.forEach(d => {
+    const mid = d.id;
+    if (mid === undefined || mid === null || mid < 0 || mid >= MAX_MODELS) return;
+    const path = d.path || 'openmbd_male.json';
+    const fname = String(path).split(/[\\/]/).pop();
+    const m = {
+      id: mid, path,
+      pos: d.pos || '0.0 0.0 0.0',
+      vel: d.vel || '0.0 0.0 0.0',
+      joints: JSON.parse(JSON.stringify(d.joints || {})),
+      joint_vels: JSON.parse(JSON.stringify(d.joint_vels || {})),
+      joint_torques: JSON.parse(JSON.stringify(d.joint_torques || {})),
+      loaded: false, tree: null, knownJoints: [], selectedJoint: null,
+    };
+    const known = uploadedModelData[fname] || EMBEDDED_MODELS[fname];
+    if (known) applyLoadedModel(m, known);
+    sim.models[mid] = m;
+  });
+
+  if (Object.keys(sim.models).length === 0) sim.models[0] = createModel(0, true);
+  const ids = Object.keys(sim.models).map(Number).sort((a, b) => a - b);
+  selModelId = ids[0];
+  renderAll();
+  buildScene();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// THREE.JS VISUALISATION — same rendering conventions as
+// openmbd_model_editor.html (lighting rig, grid/floor, orbit camera,
+// coordinate remap) so posed bodies look consistent with that tool.
+// ═══════════════════════════════════════════════════════════════════════
+let renderer, scene, camera;
+let camTheta = 0.6, camPhi = 1.1, camR = 4.5;
+let camTarget = { x: 0, y: 1, z: 0 };
+let isDrag = false, isRMB = false, lastMXY = { x: 0, y: 0 };
+const sphereGeo = (typeof THREE !== 'undefined') ? new THREE.SphereGeometry(1, 14, 9) : null;
+let sceneEntries = []; // {mesh, mid, bodyName, localT}
+
+function threeAvailable() { return typeof THREE !== 'undefined' && !!renderer; }
+
+function initThree() {
+  if (typeof THREE === 'undefined') {
+    console.warn('Three.js failed to load (no network access?) — visualisation panel will stay empty.');
+    return;
+  }
+  const vp = document.getElementById('viewport');
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.setClearColor(0x080a0c);
+  vp.insertBefore(renderer.domElement, vp.firstChild);
+
+  scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2(0x080a0c, 0.035);
+  camera = new THREE.PerspectiveCamera(44, 1, 0.02, 200);
+
+  scene.add(new THREE.AmbientLight(0x1a2a3a, 2.0));
+  const sun = new THREE.DirectionalLight(0xffe8cc, 2.8);
+  sun.position.set(3, 5, 4); sun.castShadow = true; scene.add(sun);
+  const fill = new THREE.DirectionalLight(0x3355aa, 0.9);
+  fill.position.set(-3, 1, -4); scene.add(fill);
+  const rim = new THREE.DirectionalLight(0xe8a020, 0.4);
+  rim.position.set(0, 3, -5); scene.add(rim);
+
+  const grid = new THREE.GridHelper(14, 28, 0xe8a020, 0x5e4211);
+  scene.add(grid);
+  const floorGeo = new THREE.PlaneGeometry(16, 16);
+  const floorMat = new THREE.ShadowMaterial({ opacity: 0.3 });
+  const floor = new THREE.Mesh(floorGeo, floorMat);
+  floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true;
+  scene.add(floor);
+
+  updateCamera();
+  resizeViewport();
+  window.addEventListener('resize', resizeViewport);
+
+  const c = renderer.domElement;
+  c.addEventListener('mousedown', vpMouseDown);
+  c.addEventListener('mousemove', vpMouseMove);
+  c.addEventListener('mouseup', () => isDrag = false);
+  c.addEventListener('wheel', vpWheel, { passive: false });
+  c.addEventListener('contextmenu', e => e.preventDefault());
+
+  drawAxesHUD();
+  animate();
+}
+
+function resizeViewport() {
+  if (!threeAvailable()) return;
+  const vp = document.getElementById('viewport');
+  const w = vp.clientWidth, h = vp.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / (h || 1);
+  camera.updateProjectionMatrix();
+}
+
+function updateCamera() {
+  if (!threeAvailable()) return;
+  const x = camTarget.x + camR * Math.sin(camPhi) * Math.sin(camTheta);
+  const y = camTarget.y + camR * Math.cos(camPhi);
+  const z = camTarget.z + camR * Math.sin(camPhi) * Math.cos(camTheta);
+  camera.position.set(x, y, z);
+  camera.lookAt(camTarget.x, camTarget.y, camTarget.z);
+  drawAxesHUD();
+}
+
+function vpMouseDown(e) { isDrag = true; isRMB = e.button === 2; lastMXY = { x: e.clientX, y: e.clientY }; }
+function vpMouseMove(e) {
+  if (!isDrag) return;
+  const dx = e.clientX - lastMXY.x, dy = e.clientY - lastMXY.y;
+  lastMXY = { x: e.clientX, y: e.clientY };
+  if (isRMB) {
+    const camDir = new THREE.Vector3(); camera.getWorldDirection(camDir);
+    const right = new THREE.Vector3().crossVectors(camDir, camera.up).normalize();
+    const speed = 0.0015 * camR;
+    camTarget.x -= right.x * dx * speed; camTarget.y += camera.up.y * dy * speed; camTarget.z -= right.z * dx * speed;
+  } else {
+    camTheta -= dx * 0.007;
+    camPhi = Math.max(0.04, Math.min(Math.PI - 0.04, camPhi + dy * 0.007));
+  }
+  updateCamera();
+}
+function vpWheel(e) {
+  e.preventDefault();
+  camR = Math.max(0.3, Math.min(40, camR + e.deltaY * 0.001 * camR));
+  updateCamera();
+}
+function setView(v) {
+  const views = { front: { t: 0, p: Math.PI / 2 }, side: { t: Math.PI / 2, p: Math.PI / 2 }, top: { t: 0, p: 0.05 }, iso: { t: 0.6, p: 1.1 } };
+  const vd = views[v]; if (!vd) return;
+  camTheta = vd.t; camPhi = vd.p; updateCamera();
+}
+
+function drawAxesHUD() {
+  const c = document.getElementById('axcanvas'); if (!c || !threeAvailable()) return;
+  c.width = 52; c.height = 52;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 52, 52);
+  const cx = 26, cy = 26, len = 18;
+  const axes = [{ v: new THREE.Vector3(1,0,0), col:'#e05555', lbl:'X' },
+                { v: new THREE.Vector3(0,1,0), col:'#55c855', lbl:'Y' },
+                { v: new THREE.Vector3(0,0,1), col:'#4a90d9', lbl:'Z' }];
+  const cam = camera.matrixWorldInverse;
+  axes.forEach(a => {
+    const v = a.v.clone().applyMatrix4(cam).normalize();
+    const ex = cx + v.x * len, ey = cy - v.y * len;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey);
+    ctx.strokeStyle = a.col; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = a.col; ctx.font = 'bold 9px monospace';
+    ctx.fillText(a.lbl, ex + (v.x > 0 ? 2 : -8), ey - (v.y > 0 ? 2 : -10));
+  });
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  if (threeAvailable()) renderer.render(scene, camera);
+}
+
+function buildScene() {
+  const emptyState = document.getElementById('vp-empty');
+  if (!threeAvailable()) { if (emptyState) emptyState.classList.add('show'); return; }
+  sceneEntries.forEach(e => scene.remove(e.mesh));
+  sceneEntries = [];
+  const ids = Object.keys(sim.models).map(Number).sort((a, b) => a - b);
+  let any = false;
+  ids.forEach(mid => {
+    const m = sim.models[mid];
+    if (!m.loaded || !m.tree) return;
+    any = true;
+    const color = MODEL_COLORS_THREE[mid];
+    Object.entries(m.tree.bodies).forEach(([bodyName, body]) => {
+      (body.ellipsoids || []).forEach(ell => {
+        const mat = new THREE.MeshPhongMaterial({ color, shininess: 30, specular: 0x223344, transparent: true, opacity: 0.82 });
+        const mesh = new THREE.Mesh(sphereGeo, mat);
+        mesh.scale.set(ell.dimensions[1], ell.dimensions[2], ell.dimensions[0]);
+        mesh.castShadow = true;
+        scene.add(mesh);
+        sceneEntries.push({ mesh, mid, bodyName, localT: buildLocalT(ell) });
+      });
+    });
+  });
+  if (emptyState) emptyState.classList.toggle('show', !any);
+  updateAllPoses();
+  fitCameraToScene();
+}
+
+function updateAllPoses() {
+  if (!threeAvailable()) return;
+  const ids = Object.keys(sim.models).map(Number).sort((a, b) => a - b);
+  const transformsByModel = {};
+  ids.forEach(mid => {
+    const m = sim.models[mid];
+    if (m.loaded && m.tree) transformsByModel[mid] = computeBodyTransforms(m);
+  });
+  sceneEntries.forEach(entry => {
+    const transforms = transformsByModel[entry.mid];
+    const bodyT = transforms ? transforms[entry.bodyName] : null;
+    if (!bodyT) { entry.mesh.visible = false; return; }
+    entry.mesh.visible = true;
+    const worldT = mat4Mul(bodyT, entry.localT);
+    const pos = modelPosToScene([worldT[0][3], worldT[1][3], worldT[2][3]]);
+    entry.mesh.position.set(pos[0], pos[1], pos[2]);
+    const R3 = [[worldT[0][0],worldT[0][1],worldT[0][2]],
+                [worldT[1][0],worldT[1][1],worldT[1][2]],
+                [worldT[2][0],worldT[2][1],worldT[2][2]]];
+    entry.mesh.setRotationFromMatrix(modelRot3ToThreeMatrix4(R3));
+  });
+}
+
+function fitCameraToScene() {
+  if (!threeAvailable()) return;
+  const box = new THREE.Box3();
+  let has = false;
+  sceneEntries.forEach(e => { if (e.mesh.visible) { box.expandByObject(e.mesh); has = true; } });
+  if (!has) { camTarget = { x: 0, y: 1, z: 0 }; camR = 4.5; updateCamera(); return; }
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z, 0.6);
+  camTarget = { x: center.x, y: center.y, z: center.z };
+  camR = maxDim * 2.3;
+  updateCamera();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// WELCOME OVERLAY
+// ═══════════════════════════════════════════════════════════════════════
+function dismissWelcome() { document.getElementById('welcome').classList.remove('open'); }
+
+// ═══════════════════════════════════════════════════════════════════════
+// STARTUP — mirrors SimulationCreatorTab.initial_load()'s default: Model A
+// auto-loaded from openmbd_male.json at 0.0 0.0 1.05.
+// ═══════════════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  loadEmbedded('embedded-male', 'openmbd_male.json');
+  loadEmbedded('embedded-female', 'openmbd_female.json');
+  loadEmbedded('embedded-bicycle', 'openmbd_bicycle.json');
+  loadEmbedded('embedded-car', 'openmbd_car.json');
+
+  initThree();
+
+  sim.models[0] = createModel(0, true);
+  selModelId = 0;
+  renderAll();
+  buildScene();
+
+  window.sim = sim; // exposed for console debugging (sim.models mutates in place)
+  window.uploadedModelData = uploadedModelData;
+});
+</script>
+</body>
+</html>
