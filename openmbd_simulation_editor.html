@@ -253,7 +253,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
   <div class="wc">
     <div class="wc-logo">Open<span>MBD</span></div>
     <div class="wc-sub2">Simulation Editor</div>
-    <div class="wc-sub">Set up initial pose, joint velocities and torque pulses for up to three bodies — with the same controls as Tab 1 — then save a config file that loads straight back into the simulator.</div>
+    <div class="wc-sub">Set up initial pose, joint velocities and torque pulses for up to three models then save a config file that loads into the simulator.</div>
     <hr class="wc-sep">
     <div class="wc-btns">
       <button class="wc-btn pri" onclick="dismissWelcome()">✦ New Config</button>
@@ -463,7 +463,7 @@ function modelRot3ToThreeMatrix4(R3) {
 // STATE
 // ═══════════════════════════════════════════════════════════════════════
 let sim = {
-  dt: '0.0001', out_dt: '0.001', dur: '0.03', cof: '0.4', contact_damping: '150',
+  dt: '0.00001', out_dt: '0.001', dur: '0.03', cof: '0.4', contact_damping: '150',
   models: {},
 };
 let selModelId = null;
@@ -797,7 +797,7 @@ function onConfigFileLoad(e) {
 }
 
 function importConfig(data) {
-  sim.dt = String(data.dt ?? '0.0001');
+  sim.dt = String(data.dt ?? '0.00001');
   sim.out_dt = String(data.out_dt ?? '0.001');
   sim.dur = String(data.dur ?? '0.03');
   sim.cof = String(data.cof ?? '0.4');
@@ -945,12 +945,22 @@ function drawAxesHUD() {
   const ctx = c.getContext('2d');
   ctx.clearRect(0, 0, 52, 52);
   const cx = 26, cy = 26, len = 18;
-  const axes = [{ v: new THREE.Vector3(1,0,0), col:'#e05555', lbl:'X' },
-                { v: new THREE.Vector3(0,1,0), col:'#55c855', lbl:'Y' },
-                { v: new THREE.Vector3(0,0,1), col:'#4a90d9', lbl:'Z' }];
+  // Draw the model's own X(AP)/Y(ML)/Z(SI-up) axes, not raw Three.js scene
+  // axes. This tool maps model->scene as scene.x=model.y, scene.y=model.z,
+  // scene.z=model.x (see modelPosToScene -- a pure axis permutation, no
+  // sign flip), so scene-Y ("up" on screen) is actually the model's Z
+  // axis, not its Y axis.
+  const axes = [{ v: new THREE.Vector3(0,0,1), col:'#e05555', lbl:'X' },  // scene Z = model X (AP)
+                { v: new THREE.Vector3(1,0,0), col:'#55c855', lbl:'Y' },  // scene X = model Y (ML)
+                { v: new THREE.Vector3(0,1,0), col:'#4a90d9', lbl:'Z' }]; // scene Y = model Z (SI/up)
   const cam = camera.matrixWorldInverse;
   axes.forEach(a => {
-    const v = a.v.clone().applyMatrix4(cam).normalize();
+    // transformDirection applies only the rotation part of the matrix (no
+    // translation). applyMatrix4 treated the axis as a world POINT, so the
+    // camera's translation (much larger than a unit vector) dominated the
+    // result and all three axes collapsed toward nearly the same screen
+    // direction.
+    const v = a.v.clone().transformDirection(cam);
     const ex = cx + v.x * len, ey = cy - v.y * len;
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey);
     ctx.strokeStyle = a.col; ctx.lineWidth = 2; ctx.stroke();
