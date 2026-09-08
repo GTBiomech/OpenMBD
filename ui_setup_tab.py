@@ -1,6 +1,6 @@
 # ui_setup_tab.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.0 
+# Version: 1.1 
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import tkinter as tk
@@ -40,12 +40,74 @@ class SimulationCreatorTab(ttk.Frame):
     #  Layout                                                              #
     # ------------------------------------------------------------------ #
 
+    def _build_scrollable_left_pane(self, pane):
+        """
+        Wrap the left (setup) pane's content in a Canvas + Scrollbar so it
+        scrolls instead of being clipped/squeezed at lower screen
+        resolutions or short windows. Returns the inner ttk.Frame that all
+        the existing widgets should be packed into, exactly as before.
+        """
+        left_outer = ttk.Frame(pane)
+        pane.add(left_outer, weight=1)
+
+        try:
+            bg_color = ttk.Style().lookup('TFrame', 'background') or '#f0f0f0'
+        except Exception:
+            bg_color = '#f0f0f0'
+
+        left_canvas = tk.Canvas(left_outer, highlightthickness=0, bd=0,
+                                bg=bg_color)
+        left_scroll = ttk.Scrollbar(left_outer, orient=tk.VERTICAL,
+                                    command=left_canvas.yview)
+        left_canvas.configure(yscrollcommand=left_scroll.set)
+        left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        left_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        left = ttk.Frame(left_canvas, padding=10)
+        left_window = left_canvas.create_window((0, 0), window=left,
+                                                 anchor='nw')
+
+        def _on_left_configure(event):
+            left_canvas.configure(scrollregion=left_canvas.bbox("all"))
+        left.bind('<Configure>', _on_left_configure)
+
+        def _on_canvas_configure(event):
+            # Keep the inner frame's width matched to the canvas so widgets
+            # that pack with fill=X still stretch correctly, and no
+            # horizontal scrollbar is ever needed.
+            left_canvas.itemconfig(left_window, width=event.width)
+        left_canvas.bind('<Configure>', _on_canvas_configure)
+
+        def _on_mousewheel(event):
+            # Windows/macOS report event.delta (sign gives direction);
+            # Linux/X11 reports discrete Button-4 (up) / Button-5 (down).
+            if event.num == 5 or event.delta < 0:
+                left_canvas.yview_scroll(1, 'units')
+            elif event.num == 4 or event.delta > 0:
+                left_canvas.yview_scroll(-1, 'units')
+
+        def _bind_mousewheel(_event=None):
+            left_canvas.bind_all('<MouseWheel>', _on_mousewheel)
+            left_canvas.bind_all('<Button-4>', _on_mousewheel)
+            left_canvas.bind_all('<Button-5>', _on_mousewheel)
+
+        def _unbind_mousewheel(_event=None):
+            left_canvas.unbind_all('<MouseWheel>')
+            left_canvas.unbind_all('<Button-4>')
+            left_canvas.unbind_all('<Button-5>')
+
+        # Only capture the mouse wheel while the pointer is actually over
+        # this panel, so scrolling elsewhere in the app isn't hijacked.
+        left_canvas.bind('<Enter>', _bind_mousewheel)
+        left_canvas.bind('<Leave>', _unbind_mousewheel)
+
+        return left
+
     def _init_layout(self):
         pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         pane.pack(fill=tk.BOTH, expand=True)
 
-        left = ttk.Frame(pane, padding=10)
-        pane.add(left, weight=1)
+        left = self._build_scrollable_left_pane(pane)
 
         # ── Simulation Parameters ──────────────────────────────────────
         gf = ttk.LabelFrame(left, text="Simulation Parameters")
