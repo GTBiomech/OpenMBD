@@ -569,13 +569,27 @@ function drawAxesHUD() {
   const ctx = c.getContext('2d');
   ctx.clearRect(0,0,56,56);
   const cx=28, cy=28, len=20;
-  // Project axes through camera
-  const axes = [{v:new THREE.Vector3(1,0,0),col:'#e05555',lbl:'X'},
-                {v:new THREE.Vector3(0,1,0),col:'#55c855',lbl:'Y'},
-                {v:new THREE.Vector3(0,0,1),col:'#4a90d9',lbl:'Z'}];
+  // Draw the model's own X(AP)/Y(ML)/Z(SI-up) axes, not raw Three.js scene
+  // axes. This file maps model->scene as scene.x=model.y, scene.y=model.z,
+  // scene.z=model.x (a pure axis permutation, no sign flip -- see
+  // computeWorldPos and the ellipsoid mesh code), so scene-Y ("up" on
+  // screen) is actually the model's Z axis, not its Y axis. Labeling the
+  // raw scene axes X/Y/Z made the gizmo's blue "Z" arrow point sideways
+  // (toward camera) instead of up, and mismatched the X=red/Y=green/Z=blue
+  // convention used everywhere else in this tool (revolute-axis panel, DOF
+  // badges).
+  const axes = [{v:new THREE.Vector3(0,0,1),col:'#e05555',lbl:'X'},  // scene Z = model X (AP)
+                {v:new THREE.Vector3(1,0,0),col:'#55c855',lbl:'Y'},  // scene X = model Y (ML)
+                {v:new THREE.Vector3(0,1,0),col:'#4a90d9',lbl:'Z'}]; // scene Y = model Z (SI/up)
   const cam = camera.matrixWorldInverse;
   axes.forEach(a => {
-    const v = a.v.clone().applyMatrix4(cam).normalize();
+    // transformDirection applies only the rotation part of the matrix
+    // (no translation), which is what's needed for a direction vector.
+    // Using applyMatrix4 here treated the axis as a world POINT, so the
+    // camera's translation (much larger in magnitude than a unit vector)
+    // dominated the result and all three axes collapsed toward nearly
+    // the same screen direction -- Z (drawn last) then overdrew X and Y.
+    const v = a.v.clone().transformDirection(cam);
     const ex = cx + v.x*len, ey = cy - v.y*len;
     ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(ex,ey);
     ctx.strokeStyle=a.col; ctx.lineWidth=2; ctx.stroke();
@@ -605,7 +619,7 @@ function buildScene() {
   // Skeleton lines
   const lineMat = new THREE.LineBasicMaterial({color:0x1a2535, transparent:true, opacity:0.7});
   model.joints.forEach(j => {
-    const pPos = j.parent==='GROUND' ? new THREE.Vector3(0,0.95,0) : wpos[j.parent];
+    const pPos = j.parent==='GROUND' ? wpos.GROUND : wpos[j.parent];
     const cPos = wpos[j.child];
     if(!pPos || !cPos) return;
     const geo = new THREE.BufferGeometry().setFromPoints([pPos, cPos]);
@@ -685,11 +699,32 @@ function computeWorldPos() {
   const pos = {GROUND: new THREE.Vector3(0,0,0)};
   const jointByChild = {};
   model.joints.forEach(j => jointByChild[j.child] = j);
-  
-  // Set pelvis as root at waist height
+
+  // Root body position: read it from the ROOT JOINT'S OWN T1 translation
+  // instead of assuming a fixed human standing height. Some models encode a
+  // real ground offset here (e.g. the bicycle's rear-axle T1 z=0.337, "wheel
+  // radius offset"); free-floating root joints on human models leave it at
+  // zero, since standing height is a simulation-time initial condition, not
+  // part of the static skeleton. Either way, we then shift the whole model
+  // vertically so its lowest ellipsoid extent rests on the floor grid,
+  // reusing the Scale tool's own T1-chain height math (computeModelHeight)
+  // so this stays consistent with the model's actual data instead of a
+  // guessed constant.
   const rootJoint = model.joints.find(j=>j.parent==='GROUND');
-  if(rootJoint) pos[rootJoint.child] = new THREE.Vector3(0, 0.95, 0);
-  
+  let rootPos = new THREE.Vector3(0, 0, 0);
+  if(rootJoint) {
+    const T1 = rootJoint.T1;
+    const tx=T1[0][3], ty=T1[1][3], tz=T1[2][3];
+    // Model: tx=X(AP), ty=Y(ML), tz=Z(SI) -> Scene: x=ty, y=tz, z=tx
+    rootPos = new THREE.Vector3(ty, tz, tx);
+  }
+  const hInfo = computeModelHeight();
+  // sole_z already includes the root joint's own T1 z-offset (chainZ walks
+  // all the way up to GROUND), so subtracting it lands the lowest point at
+  // scene y=0 without double-counting that offset.
+  if(hInfo) rootPos.y -= hInfo.sole_z;
+  if(rootJoint) pos[rootJoint.child] = rootPos;
+
   // BFS
   const children = {};
   model.joints.forEach(j => { if(!children[j.parent]) children[j.parent]=[]; children[j.parent].push(j.child); });
@@ -699,7 +734,7 @@ function computeWorldPos() {
   
   while(queue.length>0) {
     const body = queue.shift();
-    const bp = pos[body] || new THREE.Vector3(0,0.95,0);
+    const bp = pos[body] || rootPos;
     (children[body]||[]).forEach(child => {
       if(visited.has(child)) return;
       visited.add(child);
@@ -1053,11 +1088,13 @@ function renderJointPanel() {
       <div class="psec-body">
         <div class="prow"><span class="plbl">type</span>
           <select class="pselect" onchange="jnt_set_type('${j.name}',this.value)">
+            <option ${j.type==='free'?'selected':''}>free</option>
             <option ${j.type==='spherical'?'selected':''}>spherical</option>
             <option ${j.type==='fixed'?'selected':''}>fixed</option>
             <option ${j.type==='revolute'?'selected':''}>revolute</option>
           </select>
         </div>
+        ${j.type==='free' && j.parent!=='GROUND' ? `<div class="rev-warn" style="margin-bottom:6px">⚠ 'free' (6-DOF) joints are only handled correctly by the engine when parent is GROUND (the root joint). Non-root free joints will silently behave as 'fixed'.</div>` : ''}
         <div class="prow"><span class="plbl">parent</span>
           <input class="pinput" value="${j.parent}" onchange="jnt_set('${j.name}','parent',this.value)">
         </div>
