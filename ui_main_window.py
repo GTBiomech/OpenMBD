@@ -57,7 +57,7 @@ class SimulatorGUI:
         try:
             dt_value = float(self.create_tab.ent_dt.get())
         except Exception:
-            dt_value = 0.0002   # fallback matches PhysicsEngine default
+            dt_value = 0.00001   # fallback matches PhysicsEngine default
 
         try:
             self.duration = float(self.create_tab.ent_dur.get())
