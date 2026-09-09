@@ -117,7 +117,7 @@ class SimulationCreatorTab(ttk.Frame):
         f_dt_dur.pack(fill=tk.X)
         ttk.Label(f_dt_dur, text="Sim Dt (s):").pack(side=tk.LEFT)
         self.ent_dt = ttk.Entry(f_dt_dur, width=8)
-        self.ent_dt.insert(0, "0.0001")
+        self.ent_dt.insert(0, "0.00001")
         self.ent_dt.pack(side=tk.LEFT)
         ttk.Label(f_dt_dur, text="Output Dt (s):").pack(side=tk.LEFT, padx=(8, 0))
         self.ent_out_dt = ttk.Entry(f_dt_dur, width=8)
@@ -438,7 +438,7 @@ class SimulationCreatorTab(ttk.Frame):
         self.main_app.models[0].path  = 'openmbd_male.json'
 
         self.ent_dt.delete(0, tk.END)
-        self.ent_dt.insert(0, "0.0001")
+        self.ent_dt.insert(0, "0.00001")
 
         self.refresh_model(self.main_app.models[0], "0.0 0.0 1.05",
                            "0.0 0.0 0.0")
@@ -798,7 +798,7 @@ class SimulationCreatorTab(ttk.Frame):
                 data = json.load(fp)
 
             self.ent_dt.delete(0, tk.END)
-            self.ent_dt.insert(0, data.get("dt", "0.0001"))
+            self.ent_dt.insert(0, data.get("dt", "0.00001"))
             self.ent_out_dt.delete(0, tk.END)
             self.ent_out_dt.insert(0, data.get("out_dt", "0.001"))
             self.ent_dur.delete(0, tk.END)
