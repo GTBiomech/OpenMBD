@@ -1,6 +1,6 @@
 # physics_engine.py  
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.3 
+# Version: 1.1 
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import numpy as np
@@ -335,25 +335,14 @@ class PhysicsEngine:
                     except Exception:
                         vel = np.zeros(3)
                     self.state[self.nq+s : self.nq+s+3] = vel
-                    # qdot[s+3:s+6] is used as WORLD-frame omega everywhere else
-                    # in the engine (see _update_body_velocities_from_qdot, rnea,
-                    # compute_a1_a2_analytic and the symplectic-Euler integrator
-                    # in step()), so that is what must be stored here.
-                    #
-                    # However, the value supplied via joint_vels is specified in
-                    # the root joint's LOCAL (body) frame — exactly like every
-                    # other spherical joint in the model (see the dof==4 branch
-                    # below, where omega_rel = body.R @ qd_j[:3]).  Root
-                    # angular velocity must therefore be rotated into world
-                    # frame using the initial orientation R computed above
-                    # before being written into the world-frame state slot.
+                    # Root angular velocity stored as world-frame omega (rad/s).
+                    # Read from joint_vels (same mechanism as all other joints).
                     joint_vels = getattr(config, 'joint_vels', {})
-                    ang_vel_local = np.array(
+                    ang_vel_rad = np.array(
                         joint_vels.get(jname,
                         joint_vels.get('root_joint', [0.0, 0.0, 0.0]))[:3],
                         dtype=float)
-                    ang_vel_world = R @ ang_vel_local
-                    self.state[self.nq+s+3 : self.nq+s+6] = ang_vel_world
+                    self.state[self.nq+s+3 : self.nq+s+6] = ang_vel_rad
                     # qdot[s+6] = 0  (quaternion norm constraint — not a DOF)
                 elif dof == 3:
                     ang_deg = config.joints.get(jname, [0,0,0])
@@ -1556,18 +1545,7 @@ class PhysicsEngine:
 
             key = (entry['model_idx'], entry['joint_name'])
             if key not in self.joint_dof_map:
-                # 'root_joint' is an alias for whatever the model's actual
-                # ground joint is named (e.g. 'rootJoint'); joint_dof_map is
-                # only keyed by the name that survived add_model()'s
-                # id-based de-duplication of joint_infos aliases. Resolve it
-                # instead of silently dropping the entry.
-                if entry['joint_name'] == 'root_joint':
-                    for (m, jn, ji, d) in self.joint_list:
-                        if m == entry['model_idx'] and ji.get('is_root_joint', False):
-                            key = (m, jn)
-                            break
-                if key not in self.joint_dof_map:
-                    continue
+                continue
             s, dof = self.joint_dof_map[key]
 
             trq = np.asarray(entry['torque'], dtype=float)
@@ -1612,29 +1590,6 @@ class PhysicsEngine:
                             tau_scalar = float(np.dot(ax_world, trq_world))
                         break
                 tau[s] += tau_scalar * scale
-            elif dof == 7:
-                # Free root joint: q[s:s+3]/qdot[s:s+3] are TRANSLATION,
-                # q[s+3:s+7]/qdot[s+3:s+6] are the quaternion / WORLD-frame
-                # omega. The generic branch below would incorrectly dump a
-                # "torque" into the translational force slots tau[s:s+3].
-                # A torque must instead go into the rotational slots
-                # tau[s+3:s+6], and — like the root angular-velocity fix —
-                # the pulse is specified in the root body's LOCAL frame and
-                # must be rotated into world frame using the body's CURRENT
-                # orientation (the pulse direction rotates with the body).
-                root_body = None
-                for bi, body_i in enumerate(self.bodies):
-                    if (body_i.model_idx == entry['model_idx']
-                            and self.parent_idx[bi] == -1):
-                        root_body = body_i
-                        break
-                if root_body is not None:
-                    n = min(3, len(trq))
-                    trq_local = np.zeros(3)
-                    trq_local[:n] = trq[:n]
-                    tau[s+3:s+6] += (root_body.R @ trq_local) * scale
-                # tau[s:s+3] (translation) and tau[s+6] (quaternion-norm
-                # constraint slot) are intentionally left untouched.
             else:
                 n = min(dof, len(trq))
                 tau[s:s + n] += trq[:n] * scale
