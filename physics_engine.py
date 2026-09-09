@@ -35,7 +35,7 @@ class PhysicsEngine:
 
         # ── Timestep ──────────────────────────────────────────────────
 
-        self.dt = 0.0001                             
+        self.dt = 0.00001                             
         self.record_every = 10   # record one state per this many integration steps
 
         self.time = 0.0
