@@ -1,6 +1,6 @@
 # physics_constraints.py  
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.0 
+# Version: 1.1 
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import numpy as np
@@ -180,8 +180,14 @@ class SimpleContact:
     Normal convention
     ----------------------------------------
     ``normal`` always points INTO bodyA (away from the contact surface /
-    away from bodyB).  Equivalently, ``dot(vA - vB, normal) > 0`` means
-    the bodies are *approaching* (loading); < 0 means separating (unloading).
+    away from bodyB).  Because it points *from* bodyB *toward* bodyA,
+    ``dot(vA - vB, normal) < 0`` means the bodies are *approaching*
+    (loading) and > 0 means they are separating (unloading).  The
+    penetration rate is therefore ``lambda_dot = -dot(vA - vB, normal)``.
+
+    (This docstring previously asserted the opposite sign.  Verified
+    numerically against the penetration trend: v_rel_n is negative on every
+    step where penetration is increasing.)
 
     This single convention is used consistently by:
       • detect_contacts   – stores ``contact_normal = -geometric_normal``
@@ -341,19 +347,17 @@ class SimpleContact:
         F_elastic = _hysteresis_force(curve, penetration, pen_max, self.eta,
                                       unload_curve=unload_curve)
 
-        # ── Damping force─────────────────────
-        # F_d = C_d · |v_norm|  (always non-negative)
-        F_damping = self.damping * abs(v_rel_n)
+        # ── Damping ──────────────────────────────────────────────────
+        # Kelvin-Voigt with a unilateral clamp (see PhysicsEngine.
+        # _contact_magnitude for the full rationale).  `normal` points into
+        # bodyA, so v_rel_n < 0 while approaching and the penetration rate is
+        # lambda_dot = -v_rel_n.  Taking the damping sign from lambda_dot
+        # rather than from the penetration-history flag keeps the two
+        # consistent at every loading/unloading reversal.
+        F_damping = self.damping * (-v_rel_n)
 
-        # ── Combine loading/unloading rule ─────────────────
-        is_loading = bool(self._state.get('loading', True))
-        if is_loading:
-            F_total = F_elastic + F_damping
-        else:
-            # Unloading: damping opposes elastic recovery
-            F_total = max(0.0, F_elastic - F_damping)
-
-        return max(0.0, F_total)
+        # A contact may push but never pull.
+        return max(0.0, F_elastic + F_damping)
 
     # ─────────────────────────────────────────────────────────────────
     # Friction ramp 
@@ -387,8 +391,11 @@ class SimpleContact:
         v_rel   = vA - vB
         v_rel_n = np.dot(v_rel, self.normal)
 
-        # Skip if no contact to resolve
-        if v_rel_n <= -0.001 and self.penetration < 0.001:
+        # Skip if there is nothing to resolve: barely touching AND separating.
+        # (v_rel_n > 0 is separating under the corrected sign convention; the
+        # old test used v_rel_n <= -0.001, which skipped *approaching*
+        # contacts instead.)
+        if v_rel_n >= 0.001 and self.penetration < 0.001:
             return
 
         force_n   = self.get_contact_force(self.penetration, v_rel_n)
