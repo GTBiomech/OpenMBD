@@ -1,6 +1,6 @@
 # physics_engine.py  
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.1 
+# Version: 1.4 
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import numpy as np
@@ -337,11 +337,24 @@ class PhysicsEngine:
                     self.state[self.nq+s : self.nq+s+3] = vel
                     # Root angular velocity stored as world-frame omega (rad/s).
                     # Read from joint_vels (same mechanism as all other joints).
+                    # joint_vels entries are supplied in the UI's [wZ,wY,wX]
+                    # label order (see ModelConfig.joint_vels docstring and
+                    # the identical convention used for joint_torques below),
+                    # but qdot[s+3:s+6] is consumed everywhere else in this
+                    # file (see _update_body_velocities_from_qdot, rnea,
+                    # compute_a1_a2_analytic, and the quaternion ODE in
+                    # step()) as a literal (omega_x, omega_y, omega_z) world
+                    # Cartesian vector. Reorder [wZ,wY,wX] -> (x,y,z) here so
+                    # the "Z"-labeled slider genuinely drives world-Z spin
+                    # instead of silently driving world-X (Y is unaffected
+                    # either way, which is why this went unnoticed by any
+                    # test that only ever drove the middle/Y component).
                     joint_vels = getattr(config, 'joint_vels', {})
-                    ang_vel_rad = np.array(
+                    vel_zyx = np.array(
                         joint_vels.get(jname,
                         joint_vels.get('root_joint', [0.0, 0.0, 0.0]))[:3],
                         dtype=float)
+                    ang_vel_rad = vel_zyx[::-1]   # [wZ,wY,wX] -> (wX,wY,wZ)
                     self.state[self.nq+s+3 : self.nq+s+6] = ang_vel_rad
                     # qdot[s+6] = 0  (quaternion norm constraint — not a DOF)
                 elif dof == 3:
@@ -363,10 +376,17 @@ class PhysicsEngine:
                         [-sb,   cb*sg,             cb*cg           ]
                     ])
                     self.state[s:s+4] = matrix_to_quat(R)   # [qw,qx,qy,qz]
-                    # Per-joint angular velocity (rad/s) in LOCAL frame
+                    # Per-joint angular velocity (rad/s) in LOCAL frame.
+                    # Same [wZ,wY,wX] -> (x,y,z) reorder as the root case
+                    # above: qdot[s:s+3] is consumed as a literal local-frame
+                    # (omega_x,omega_y,omega_z) vector (e.g.
+                    # `omega_rel = body.R @ qd_j[:3]` in
+                    # _update_body_velocities_from_qdot / rnea), so it must
+                    # not be left in the UI's Z-first label order.
                     joint_vels = getattr(config, 'joint_vels', {})
-                    vel_rad = joint_vels.get(jname, [0.0, 0.0, 0.0])
-                    self.state[self.nq+s : self.nq+s+3] = [float(v) for v in vel_rad[:3]]
+                    vel_zyx = joint_vels.get(jname, [0.0, 0.0, 0.0])
+                    vel_xyz = [float(v) for v in vel_zyx[:3]][::-1]
+                    self.state[self.nq+s : self.nq+s+3] = vel_xyz
                     # qdot[s+3] = 0 (quaternion norm constraint slot)
                 elif dof == 1:
                     # Revolute joint: the single DOF is the rotation angle
@@ -440,16 +460,38 @@ class PhysicsEngine:
             e for e in self.prescribed_torques
             if e['model_idx'] != model_idx
         ]
+
+        # Resolve this model's REAL root-joint name (e.g. 'rootJoint',
+        # 'car_free_jnt', 'bike_free_jnt', ...). The config/UI layer always
+        # keys the root entry with the canonical alias 'root_joint' (see
+        # _initialize_state_from_config's root branch, which accepts either
+        # 'root_joint' or the real name) but self.joint_dof_map is only ever
+        # populated with the joint's real underlying name -- it never
+        # contains the literal string 'root_joint'. Without this resolution
+        # step, `key = (model_idx, 'root_joint')` would never be found in
+        # joint_dof_map inside _compute_prescribed_torques, so every root
+        # torque entry was silently skipped every step -- prescribed torques
+        # on the root never reached the equations of motion at all.
+        real_root_name = None
+        for (m, jn, ji, dof) in self.joint_list:
+            if m == model_idx and ji.get('is_root_joint', False):
+                real_root_name = jn
+                break
+
         jt = getattr(config, 'joint_torques', {})
         for jname, spec in jt.items():
             trq      = spec.get('torque',   [0.0, 0.0, 0.0])
             t_start  = float(spec.get('t_start',  0.0))
             duration = float(spec.get('duration', 0.0))
+            resolved_name = jname
+            if real_root_name is not None and (
+                    jname == 'root_joint' or jname.startswith('root_joint_')):
+                resolved_name = real_root_name
             # Only register entries where at least one axis has a non-zero torque
             if any(abs(float(v)) > 1e-9 for v in trq):
                 self.prescribed_torques.append({
                     'model_idx':  model_idx,
-                    'joint_name': jname,
+                    'joint_name': resolved_name,
                     'torque':     np.array([float(v) for v in trq]),
                     't_start':    t_start,
                     'duration':   duration,
@@ -462,6 +504,7 @@ class PhysicsEngine:
         self.joint_axis_local= [None]  * n
         self.joint_T1        = [None]  * n
         self.joint_T2        = [None]  * n
+        self.joint_T2_inv    = [None]  * n
         self.joint_start_idx = [-1]    * n
         self.joint_dof       = [0]     * n
 
@@ -484,6 +527,7 @@ class PhysicsEngine:
             self.parent_idx[i]  = name_to_idx[parent_name]
             self.joint_T1[i]    = ji['T1'].copy()
             self.joint_T2[i]    = ji['T2'].copy()
+            self.joint_T2_inv[i]= ji['T2_inv'].copy()
             jt = ji.get('type', 'fixed')
             self.joint_type[i]  = jt
             if jt == 'revolute':
@@ -1225,11 +1269,163 @@ class PhysicsEngine:
             jstates_deg = {k: np.degrees(v) for k, v in jstates[midx].items()}
             model.update_kinematics(jstates_deg, rpos, rang_deg)
 
-        for body in self.bodies:
-            vis = self.models[body.model_idx].bodies.get(
-                      body.name.split('_', 1)[1])
-            if vis is not None:
-                body.set_state_from_transform(vis.global_transform)
+        # Compute body.pos/R/quat directly from the quaternion (and, for
+        # revolute joints, an exact single-axis rotation) state -- see
+        # _compute_body_poses_from_state for why this must not go through
+        # the Euler-angle round trip used above to drive the visual model.
+        self._compute_body_poses_from_state(q)
+
+    @staticmethod
+    def _rodrigues_rotation(axis, angle):
+        """
+        Rotation matrix for a rotation of `angle` radians about a unit
+        `axis` (Rodrigues' formula). A single-axis rotation has no
+        gimbal-lock singularity for ANY axis direction (unlike a 3-angle
+        ZYX Euler composition), so this is the exact, safe way to build a
+        revolute joint's rotation regardless of how its axis is oriented.
+        """
+        axis = np.asarray(axis, dtype=float)
+        n = np.linalg.norm(axis)
+        if n < 1e-12:
+            return np.eye(3)
+        axis = axis / n
+        K = skew(axis)
+        return np.eye(3) + np.sin(angle) * K + (1.0 - np.cos(angle)) * (K @ K)
+
+    def _compute_body_poses_from_state(self, q):
+        """
+        Forward kinematics computed DIRECTLY from the generalised
+        coordinates -- sets body.pos, body.R, body.quat for every body,
+        without ever routing a quaternion or revolute DOF through Euler
+        angles.
+
+        Why this exists (separate from the block above that drives the
+        visual MultibodyHumanModel for the setup-tab preview):
+        `update_kinematics_from_q` used to finish by extracting ZYX Euler
+        angles from every joint's quaternion, feeding those degrees into
+        the visual model's Rz@Ry@Rx forward-kinematics chain, and copying
+        THAT rotation matrix into body.R/pos via
+        body.set_state_from_transform(vis.global_transform). Even though
+        the state `q` that gets time-integrated is quaternion-based and
+        never itself hits a singularity, body.R/pos -- which is what
+        actually drives every subsequent dynamics computation (mass
+        matrix via get_world_inertia, contact detection, gravity/contact
+        force application, get_velocity_at_point, ...) -- was being
+        silently rebuilt through that lossy, gimbal-lock-prone Euler round
+        trip on EVERY step, for EVERY body. Any joint whose relative pitch
+        passed through +-90 deg (e.g. testimpact1.json's second model,
+        whose root_joint is initialised at pitch=90 deg exactly) would see
+        the extracted alpha/gamma flip discontinuously as cos(beta)
+        drifted across the `abs(cb) > 1e-6` branch threshold on floating-
+        point noise alone -- producing a real, visible jolt (an
+        oscillating, sign-flipping spurious angular velocity) even though
+        the underlying quaternion state was perfectly smooth throughout.
+
+        This method instead composes each body's world transform directly:
+        quaternion -> matrix for root/spherical joints, and an exact
+        single-axis Rodrigues rotation for revolute joints -- both
+        singularity-free for any orientation/axis, so body.R/pos stay
+        smooth no matter what the body's pitch is.
+        """
+        n = len(self.bodies)
+        T_origin = [None] * n   # 4x4 world transform of each body's ORIGIN frame
+
+        order, visited = [], [False] * n
+        stack = [i for i, p in enumerate(self.parent_idx) if p == -1]
+        while stack:
+            i = stack.pop()
+            if visited[i]:
+                continue
+            visited[i] = True
+            order.append(i)
+            stack.extend(self.children[i])
+
+        for i in order:
+            body = self.bodies[i]
+
+            if self.parent_idx[i] == -1:
+                midx = body.model_idx
+                root_entry = next(
+                    ((jn, ji, dof) for (m, jn, ji, dof) in self.joint_list
+                     if m == midx and ji.get('is_root_joint', False)), None)
+                if root_entry is None:
+                    continue
+                jn, ji, dof = root_entry
+                s, _ = self.joint_dof_map[(midx, jn)]
+                if dof == 7:
+                    pos_origin = q[s:s + 3]
+                    quat = q[s + 3:s + 7]
+                    norm = np.linalg.norm(quat)
+                    quat = quat / norm if norm > 1e-12 else np.array([1., 0., 0., 0.])
+                    R = quat_to_matrix(quat)
+                elif dof == 3:
+                    # Legacy Euler-angle root DOF (not used by any bundled
+                    # model). This representation is itself Euler-based --
+                    # there's no quaternion to fall back on, so it retains
+                    # the original gimbal-lock-prone behaviour, same as
+                    # before, for this otherwise-unused code path only.
+                    a, b, g = q[s:s + 3]
+                    ca, sa = np.cos(a), np.sin(a)
+                    cb, sb = np.cos(b), np.sin(b)
+                    cg, sg = np.cos(g), np.sin(g)
+                    R = np.array([
+                        [ca*cb, ca*sb*sg - sa*cg, ca*sb*cg + sa*sg],
+                        [sa*cb, sa*sb*sg + ca*cg, sa*sb*cg - ca*sg],
+                        [-sb,   cb*sg,             cb*cg           ]
+                    ])
+                    cfg = self.model_configs[midx]
+                    pos_origin = np.array([float(x) for x in cfg.pos_str.split()])
+                else:
+                    continue
+                T = np.eye(4)
+                T[:3, :3] = R
+                T[:3, 3] = pos_origin
+                T_origin[i] = T
+            else:
+                pi = self.parent_idx[i]
+                Tp = T_origin[pi]
+                if Tp is None:
+                    continue
+                T1  = self.joint_T1[i]
+                T2i = self.joint_T2_inv[i]
+                jtype = self.joint_type[i]
+                s, dof = self.joint_start_idx[i], self.joint_dof[i]
+
+                R_joint = np.eye(3)
+                if jtype == 'spherical' and dof == 4 and s != -1:
+                    quat = q[s:s + 4]
+                    norm = np.linalg.norm(quat)
+                    quat = quat / norm if norm > 1e-12 else np.array([1., 0., 0., 0.])
+                    R_joint = quat_to_matrix(quat)
+                elif jtype == 'spherical' and dof == 3 and s != -1:
+                    # Legacy Euler spherical joint (dead code path in the
+                    # current bundled models -- add_model always assigns
+                    # dof=4/quaternion to 'spherical' joints).
+                    a, b, g = q[s:s + 3]
+                    ca, sa = np.cos(a), np.sin(a)
+                    cb, sb = np.cos(b), np.sin(b)
+                    cg, sg = np.cos(g), np.sin(g)
+                    R_joint = np.array([
+                        [ca*cb, ca*sb*sg - sa*cg, ca*sb*cg + sa*sg],
+                        [sa*cb, sa*sb*sg + ca*cg, sa*sb*cg - ca*sg],
+                        [-sb,   cb*sg,             cb*cg           ]
+                    ])
+                elif jtype == 'revolute' and dof == 1 and s != -1:
+                    axis_joint_frame = T1[:3, 2]   # static geometry, straight from T1
+                    R_joint = self._rodrigues_rotation(axis_joint_frame, q[s])
+                # 'fixed' (or anything else): R_joint stays identity
+
+                R4 = np.eye(4)
+                R4[:3, :3] = R_joint
+                T_origin[i] = Tp @ T1 @ R4 @ T2i
+
+            T = T_origin[i]
+            if T is None:
+                continue
+            R = body.orthonormalize_rotation(T[:3, :3])
+            body.R = R
+            body.quat = matrix_to_quat(R)
+            body.pos = T[:3, 3] + R @ body.cg_local
 
     # ------------------------------------------------------------------
     # Jacobians  A1 (linear vel) and A2 (angular vel)
@@ -1590,6 +1786,38 @@ class PhysicsEngine:
                             tau_scalar = float(np.dot(ax_world, trq_world))
                         break
                 tau[s] += tau_scalar * scale
+            elif dof == 4:
+                # Quaternion spherical joint: qdot[s:s+3] are the 3 real
+                # angular-velocity DOFs (omega_local, child LOCAL x,y,z
+                # axes); slot s+3 is the quaternion-norm constraint and
+                # carries no generalised force. `trq` is supplied in the
+                # same [tauZ,tauY,tauX] label order as joint_vels/angles
+                # (see the revolute-joint case above, and the reorder
+                # applied to joint_vels in _initialize_state_from_config),
+                # so reorder to (X,Y,Z) before it lands on the
+                # (omega_x,omega_y,omega_z) generalised-force slots.
+                trq_zyx = trq[:3] if len(trq) >= 3 else np.pad(trq, (0, 3 - len(trq)))
+                trq_xyz = trq_zyx[::-1]
+                tau[s:s + 3] += trq_xyz * scale
+            elif dof == 7:
+                # Root free joint: qdot[s:s+3] is LINEAR velocity (conjugate
+                # generalised force = a literal FORCE); qdot[s+3:s+6] is the
+                # ABSOLUTE angular velocity in fixed world axes (conjugate
+                # generalised force = a TORQUE); qdot[s+6] is the
+                # quaternion-norm constraint slot (unused). A prescribed
+                # "torque" must land entirely on the angular slots
+                # (s+3:s+6) -- previously it fell into the generic branch
+                # below and was written starting at tau[s], i.e. applied as
+                # a translational FORCE instead of a rotational TORQUE (this
+                # was verified experimentally: a 300 N*m pulse produced a
+                # large linear root velocity of order 1 m/s instead of
+                # driving the intended spin). It also needs the same
+                # [tauZ,tauY,tauX] -> (X,Y,Z) reorder used for the spherical
+                # case just above and for the root's initial joint_vels in
+                # _initialize_state_from_config.
+                trq_zyx = trq[:3] if len(trq) >= 3 else np.pad(trq, (0, 3 - len(trq)))
+                trq_xyz = trq_zyx[::-1]
+                tau[s + 3:s + 6] += trq_xyz * scale
             else:
                 n = min(dof, len(trq))
                 tau[s:s + n] += trq[:n] * scale
@@ -1685,13 +1913,36 @@ class PhysicsEngine:
             if jinfo.get('is_root_joint', False) and dof == 7:
                 # Translation: Euler as normal
                 q_new[s:s+3] = q[s:s+3] + self.dt * qdot_new[s:s+3]
-                # Quaternion: qdot_quat = 0.5 * Q(q) * omega_world
+                # ROOT quaternion kinematics: qdot[s+3:s+6] is an ABSOLUTE
+                # angular velocity resolved in the fixed GLOBAL/world axes
+                # (see _update_body_velocities_from_qdot, rnea, and
+                # compute_a1_a2_analytic, which all consume it directly as
+                # omega_world with no rotation applied -- A2[:,s+3:s+6] is
+                # literally the identity Jacobian). The correct ODE for a
+                # quaternion driven by a WORLD-frame angular velocity is the
+                # LEFT quaternion product:
+                #     dq/dt = 0.5 * Omega(omega_world) (x) q
+                # i.e. omega as the pure quaternion (0,ox,oy,oz) multiplied
+                # on the LEFT of q. The previous code used the RIGHT product
+                # (0.5 * q (x) omega) instead -- that formula is only valid
+                # for a BODY-LOCAL angular velocity (it's the correct one
+                # used a few lines below for CHILD spherical joints, whose
+                # omega is genuinely local/relative). Using the body-frame
+                # formula here effectively resolved the root's "world-frame"
+                # spin through the body's own current (rotating) axes, so a
+                # fixed-world-axis spin command produced completely
+                # different motion depending on the body's initial/current
+                # orientation (verified with testspin1-4.json: identical
+                # world-Y omega=12 rad/s decayed to ~3 rad/s and leaked into
+                # X/Z for yaw=+/-90 deg initial poses, but was preserved for
+                # yaw=0/180 deg -- a clear orientation-dependent artifact of
+                # the wrong multiplication order, not real dynamics).
                 qw, qx, qy, qz = q[s+3:s+7]
                 ox, oy, oz = qdot_new[s+3:s+6]
-                dqw = 0.5 * (-qx*ox - qy*oy - qz*oz)
-                dqx = 0.5 * ( qw*ox + qy*oz - qz*oy)
-                dqy = 0.5 * ( qw*oy + qz*ox - qx*oz)
-                dqz = 0.5 * ( qw*oz + qx*oy - qy*ox)
+                dqw = 0.5 * (-ox*qx - oy*qy - oz*qz)
+                dqx = 0.5 * ( ox*qw + oy*qz - oz*qy)
+                dqy = 0.5 * ( oy*qw + oz*qx - ox*qz)
+                dqz = 0.5 * ( oz*qw + ox*qy - oy*qx)
                 new_q = np.array([qw + self.dt*dqw,
                                   qx + self.dt*dqx,
                                   qy + self.dt*dqy,
@@ -1797,15 +2048,57 @@ class PhysicsEngine:
     # ------------------------------------------------------------------
 
     def record_state(self):
-        body_states = [{
-            'name': b.name, 'model_id': b.model_id,
-            'pos': b.pos.copy(), 'quat': b.quat.copy(),
-            'vel': b.vel.copy(), 'ang_vel': b.ang_vel.copy(),
-            'lin_accel': getattr(b, 'lin_accel', np.zeros(3)).copy(),
-            'ang_accel': getattr(b, 'ang_accel', np.zeros(3)).copy(),
-            'force':  getattr(b, 'contact_force',  np.zeros(3)).copy(),
-            'torque': getattr(b, 'contact_torque', np.zeros(3)).copy(),
-        } for b in self.bodies]
+        """
+        Snapshot the current step into state_history for analysis/export.
+
+        Position and orientation (quat) are recorded in WORLD axes/frame,
+        as usual -- position is a point (not a free vector) and quat is the
+        very definition of the body's local axes relative to world, so
+        neither has a meaningful separate "local-axis projection".
+
+        Every other recorded quantity -- linear velocity, linear
+        acceleration, angular velocity, angular acceleration, contact
+        force, and contact torque/moment -- is recorded as an ABSOLUTE
+        (total, world-composed) value but resolved onto each body's OWN
+        current LOCAL axes: x_local = R_body^T @ x_world. This matches the
+        absolute/relative and world/local convention used for the live
+        simulation state (root = absolute values in fixed world axes;
+        child = relative values composed with the parent's world value via
+        R_body @ x_relative -- see _update_body_velocities_from_qdot) while
+        making the *recorded* output meaningful in each body's own frame,
+        e.g. "HeadVelX"/"HeadForceX" is the head's own local-X component,
+        not an arbitrary world-X component that depends on how the head
+        happens to be tilted. Vector magnitudes (|Vel|, |Force|, etc.) are
+        unaffected either way, since R_body is orthonormal.
+
+        Only the OUTPUT here is reframed -- body.vel, body.ang_vel,
+        body.lin_accel, body.ang_accel, body.contact_force and
+        body.contact_torque themselves are left untouched in WORLD axes,
+        since the rest of the engine (contact point velocities,
+        inertia-tensor rotation, the quaternion ODE, force/torque
+        accumulation, etc.) requires them in that frame to be correct.
+        """
+        body_states = []
+        for b in self.bodies:
+            Rt = b.R.T
+            vel_world        = b.vel
+            ang_vel_world    = b.ang_vel
+            lin_accel_world  = getattr(b, 'lin_accel',     np.zeros(3))
+            ang_accel_world  = getattr(b, 'ang_accel',     np.zeros(3))
+            force_world      = getattr(b, 'contact_force',  np.zeros(3))
+            torque_world     = getattr(b, 'contact_torque', np.zeros(3))
+
+            body_states.append({
+                'name': b.name, 'model_id': b.model_id,
+                'pos':  b.pos.copy(),
+                'quat': b.quat.copy(),
+                'vel':        Rt @ vel_world,
+                'ang_vel':    Rt @ ang_vel_world,
+                'lin_accel':  Rt @ lin_accel_world,
+                'ang_accel':  Rt @ ang_accel_world,
+                'force':      Rt @ force_world,
+                'torque':     Rt @ torque_world,
+            })
         self.state_history.append({'time': self.time, 'body_states': body_states})
         self.contact_history.append([c.to_dict() for c in self.contacts])
 
