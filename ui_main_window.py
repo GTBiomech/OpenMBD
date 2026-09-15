@@ -1,6 +1,6 @@
 # ui_main_window.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.0 
+# Version: 1.1
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import tkinter as tk
@@ -70,6 +70,15 @@ class SimulatorGUI:
         try:
             cof_value = float(self.create_tab.ent_cof.get())
             self.engine.friction_coef = cof_value
+        except Exception:
+            pass
+
+        # rebuild_physics() constructs a NEW PhysicsEngine, so every UI-owned
+        # parameter has to be re-applied here.  contact_damping was missing:
+        # any rebuild not routed through create_tab's own handler silently
+        # reverted the model to the 150.0 N*s/m default.
+        try:
+            self.engine.contact_damping = float(self.create_tab.ent_damping.get())
         except Exception:
             pass
 
