@@ -1071,9 +1071,10 @@ function renderJointPanel() {
         </div>
         <div class="rev-warn" id="rev-warn-${j.name}"></div>
         <div style="font-family:var(--mono);font-size:9px;color:var(--txt2);margin-top:4px;padding-top:4px;border-top:1px solid var(--border)">
-          <b style="color:var(--txtbright)">How it works:</b> The axis is encoded as the Z-column of T1.
-          T2/T2_inv rotation are recalculated automatically to keep the joint frame consistent.
-          The engine reads <code style="color:var(--teal)">T1[:3,2]</code> as the joint axis in parent-body space.
+          <b style="color:var(--txtbright)">How it works:</b> The axis is encoded as the Z-column of T1,
+          expressed in parent-body coordinates. T2 is given the same rotation (and T2_inv its inverse)
+          so the child body keeps its original orientation at zero joint angle.
+          The engine rotates about the joint frame's Z axis, which is this axis by construction.
         </div>
       </div>`;
     }
@@ -1157,14 +1158,37 @@ function _buildT1WithAxis(j, newAxis) {
     [0,    0,    0,    1  ]
   ];
 
-  // Rebuild T2/T2_inv as identity rotation (child frame aligned with joint frame)
-  // preserving existing T2 translation
+  // T2 must carry the SAME rotation as T1, preserving its own translation.
+  //
+  // The engine's forward kinematics is
+  //     T_child(q) = T_parent . T1 . Rz(q) . T2_inv
+  // so at q = 0 the child frame is  T1 . T2_inv.  Writing T2 = identity while
+  // T1 carries the axis-construction rotation therefore leaves a residual
+  // rotation of R_T1 on the child body: picking a revolute axis silently
+  // re-oriented the child and every ellipsoid attached to it.  For a +Y axis
+  // the child's local X ended up along the parent's -Z.
+  //
+  // With R_T2 = R_T1 the rotations cancel (T1 . T2_inv = [I | t1 - t2]), so at
+  // q = 0 the parent and child frames stay parallel and only the joint offset
+  // remains -- the same convention MADYMO uses when it puts an identical
+  // ORIENT on both CRDSYS_OBJECT_1 and CRDSYS_OBJECT_2 of a JOINT.REVO.
   const t2tx=j.T2[0][3], t2ty=j.T2[1][3], t2tz=j.T2[2][3];
   j.T2 = [
-    [1,0,0,t2tx],[0,1,0,t2ty],[0,0,1,t2tz],[0,0,0,1]
+    [x[0], y[0], z[0], t2tx],
+    [x[1], y[1], z[1], t2ty],
+    [x[2], y[2], z[2], t2tz],
+    [0,    0,    0,    1   ]
   ];
+  // T2_inv = inverse of a rigid transform: [R^T | -R^T t].  R^T has the frame
+  // vectors as ROWS, so R^T t = (x.t, y.t, z.t).
+  const dx = x[0]*t2tx + x[1]*t2ty + x[2]*t2tz;
+  const dy = y[0]*t2tx + y[1]*t2ty + y[2]*t2tz;
+  const dz = z[0]*t2tx + z[1]*t2ty + z[2]*t2tz;
   j.T2_inv = [
-    [1,0,0,-t2tx],[0,1,0,-t2ty],[0,0,1,-t2tz],[0,0,0,1]
+    [x[0], x[1], x[2], -dx],
+    [y[0], y[1], y[2], -dy],
+    [z[0], z[1], z[2], -dz],
+    [0,    0,    0,     1 ]
   ];
   return true;
 }
@@ -1208,10 +1232,11 @@ function jnt_set_type(jname, newType) {
   if(newType === 'revolute') {
     const ax = [j.T1[0][2], j.T1[1][2], j.T1[2][2]];
     const norm = Math.sqrt(ax[0]**2+ax[1]**2+ax[2]**2);
-    if(norm < 0.5) {
-      // T1 rotation was degenerate — initialise to +Y revolute axis
-      _buildT1WithAxis(j, [0,1,0]);
-    }
+    // Always rebuild through _buildT1WithAxis, even when T1 already has a
+    // usable Z-column: the rebuild is what makes T2/T2_inv consistent with T1.
+    // Previously this only ran when T1 was degenerate, so a joint converted
+    // from spherical kept T2 = identity and the child stayed mis-oriented.
+    _buildT1WithAxis(j, norm < 0.5 ? [0,1,0] : ax);
   }
   onChanged();
   renderJointPanel();
@@ -1497,6 +1522,24 @@ function confirmModal() {
     return [[x[0],y[0],z[0],tx],[x[1],y[1],z[1],ty],[x[2],y[2],z[2],tz],[0,0,0,1]];
   }
 
+  // Matching T2 / T2_inv for a revolute joint created by makeRevT1.  T2 carries
+  // the SAME rotation as T1 (with zero translation here) so that at q = 0 the
+  // child frame stays parallel to the parent's -- see _buildT1WithAxis.
+  function makeRevT2(T1) {
+    const R = [[T1[0][0],T1[0][1],T1[0][2]],
+               [T1[1][0],T1[1][1],T1[1][2]],
+               [T1[2][0],T1[2][1],T1[2][2]]];
+    const T2  = [[R[0][0],R[0][1],R[0][2],0],
+                 [R[1][0],R[1][1],R[1][2],0],
+                 [R[2][0],R[2][1],R[2][2],0],
+                 [0,0,0,1]];
+    const T2i = [[R[0][0],R[1][0],R[2][0],0],
+                 [R[0][1],R[1][1],R[2][1],0],
+                 [R[0][2],R[1][2],R[2][2],0],
+                 [0,0,0,1]];
+    return [T2, T2i];
+  }
+
   if(modalMode==='body') {
     const name = document.getElementById('m-bname').value.trim();
     if(!name || model.bodies[name]) { alert(!name?'Enter a name':'Body already exists'); return; }
@@ -1516,7 +1559,8 @@ function confirmModal() {
     } else {
       T1 = [[1,0,0,tx],[0,1,0,ty],[0,0,1,tz],[0,0,0,1]];
     }
-    model.joints.push({name:`${parent.toLowerCase()}-${name.toLowerCase()}Jnt`, type:jtype, parent, child:name, T1, T2:I4, T2_inv:I4});
+    const [bT2, bT2i] = (jtype==='revolute') ? makeRevT2(T1) : [I4, I4];
+    model.joints.push({name:`${parent.toLowerCase()}-${name.toLowerCase()}Jnt`, type:jtype, parent, child:name, T1, T2:bT2, T2_inv:bT2i});
     onChanged(); selectBody(name);
   } else {
     const jname = document.getElementById('m-jname').value.trim();
@@ -1533,10 +1577,11 @@ function confirmModal() {
     } else {
       T1 = [[1,0,0,tx],[0,1,0,ty],[0,0,1,tz],[0,0,0,1]];
     }
+    const [jT2, jT2i] = (jtype==='revolute') ? makeRevT2(T1) : [I4, I4];
     model.joints.push({
       name:jname, type:jtype,
       parent:document.getElementById('m-jp').value, child:document.getElementById('m-jc').value,
-      T1, T2:I4, T2_inv:I4
+      T1, T2:jT2, T2_inv:jT2i
     });
     onChanged();
   }
