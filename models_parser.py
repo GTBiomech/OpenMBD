@@ -1,6 +1,6 @@
 # models_parser.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.0 
+# Version: 1.1 
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import json
@@ -25,13 +25,26 @@ def extend_force_curve(curve_array, pen_max_m=0.15, plateau_fraction=0.85):
     if last_pen >= pen_max_m:
         return curve   # already covers the full range
 
-    plat_pen = pen_max_m * plateau_fraction
-    # Only add plateau start point if it's beyond the current end
-    extra = []
-    if last_pen < plat_pen:
-        extra.append([plat_pen, last_force])
-    extra.append([pen_max_m, last_force])
+    # Extrapolate with the terminal STIFFNESS, not a constant force.
+    #
+    # The old behaviour padded the table with a plateau at `last_force`, so any
+    # contact deeper than the last tabulated point saturated.  For the MADYMO
+    # ball-kick characteristic (0 m -> 0 N, 0.01 m -> 20 N) that capped the
+    # foot-ball force at 20 N however deep the foot went: the foot sank ~41 mm
+    # into a 100 mm ball and the ball was pushed rather than kicked.  MADYMO's
+    # FUNCTION.XY extrapolates linearly, giving 82 N at the same depth.
+    #
+    # A saturating curve also means the contact exerts NO restoring stiffness
+    # once saturated, so deep penetration is unopposed and nothing stops
+    # tunnelling.  Keeping the last segment's slope is both closer to MADYMO
+    # and numerically better behaved.
+    if len(curve) >= 2 and curve[-1, 0] > curve[-2, 0]:
+        k_end = (curve[-1, 1] - curve[-2, 1]) / (curve[-1, 0] - curve[-2, 0])
+    else:
+        k_end = 0.0
+    k_end = max(k_end, 0.0)          # never extrapolate to a falling force
 
+    extra = [[pen_max_m, last_force + k_end * (pen_max_m - last_pen)]]
     return np.vstack([curve, extra])
 
 def get_text_as_array(text):
