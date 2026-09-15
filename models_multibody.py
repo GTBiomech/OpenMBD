@@ -1,6 +1,6 @@
 # models_multibody.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.0 
+# Version: 1.1 
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import numpy as np
@@ -106,8 +106,19 @@ class MultibodyHumanModel:
                         self.joints_list.append(j_name)
                         parent.children.append((child, joint_info_map[j_name]))
 
+        # Bodies that already appear as the CHILD of an explicit joint (including
+        # one whose parent is GROUND) must not get a synthetic root joint.
+        # children_map only holds joints whose parent is another BODY, so a
+        # single-body system with an explicit GROUND joint -- a ball, a wall,
+        # an impactor -- used to be given a SECOND root joint, doubling its
+        # free DOFs and leaving 7 of them unconstrained and unintegrated.
+        explicit_children = {jd['child'] for jd in self.model_data.get('joints', [])}
+
         for body_name, body in self.bodies.items():
-            if body_name not in children_map and not any(body_name == child for children in children_map.values() for child, _ in children):
+            if (body_name not in children_map
+                    and body_name not in explicit_children
+                    and not any(body_name == child for children in children_map.values()
+                                for child, _ in children)):
                 if 'root_joint' not in self.joint_infos:
                     root_joint_info = {
                         'name': 'root_joint',
@@ -131,7 +142,14 @@ class MultibodyHumanModel:
             if joint_info['parent_name'] == 'GROUND':
                 ground_joints.append(j_name)
                 joint_info['is_root_joint'] = True
-                if joint_info.get('type', 'fixed') == 'fixed':
+                # An EXPLICIT "fixed" joint to GROUND is a weld: the body is
+                # rigidly attached to inertial space with zero DOFs.  This used
+                # to be silently rewritten to 'free', so there was no way to
+                # anchor anything -- an "anchor" body would just free-fall,
+                # taking whatever was attached to it along.  Synthetic root
+                # joints are created as 'free' already, so honouring 'fixed'
+                # here does not affect them.
+                if joint_info.get('type') is None:
                     joint_info['type'] = 'free'
 
         if ground_joints and 'root_joint' not in self.joint_infos:
