@@ -1,6 +1,6 @@
 # physics_engine.py  
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.5  
+# Version: 1.5
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import numpy as np
@@ -397,7 +397,14 @@ class PhysicsEngine:
                                 jinfo.get('child_name', '')):
                             ax = self.joint_axis_local[k_b]
                             break
-                    slot = int(np.argmax(np.abs(ax))) if ax is not None else 0
+                    # ZYX slot convention: slot 0 = Z, slot 1 = Y, slot 2 = X,
+                    # so an axis vector's component index i maps to slot 2 - i.
+                    # The previous expression used the component index directly,
+                    # which is correct only for a Y axis and transposed Z with X
+                    # -- a revolute joint built on a +Z axis in the model editor
+                    # took its angle from the X-labelled field and discarded the
+                    # value entered in the Z field.
+                    slot = (2 - int(np.argmax(np.abs(ax)))) if ax is not None else 0
                     val = float(ang_deg[slot]) if slot < len(ang_deg) else 0.0
                     self.state[s] = np.radians(val)
                     jv = getattr(config, 'joint_vels', {})
@@ -455,7 +462,10 @@ class PhysicsEngine:
                                 # Slot 0 = Z-rotation = ang_deg[0]
                                 # Slot 1 = Y-rotation = ang_deg[1]
                                 # Slot 2 = X-rotation = ang_deg[2]
-                                slot = int(np.argmax(np.abs(ax)))
+                                # Component index i therefore maps to slot 2 - i;
+                                # using i directly transposed Z and X (see the
+                                # matching comment in the dof == 1 root branch).
+                                slot = 2 - int(np.argmax(np.abs(ax)))
                                 deg_val = (float(ang_deg[slot])
                                            if slot < len(ang_deg) else 0.0)
                                 angle_rad = np.radians(deg_val)
@@ -1443,10 +1453,18 @@ class PhysicsEngine:
                         vis_obj_k = self.models[midx].bodies.get(vis_k)
                         if (vis_obj_k is not None and
                                 vis_obj_k.joint_name_to_parent == jname):
-                            ax = self.joint_axis_local[k_body]
-                            if ax is not None:
-                                # Dominant component: 0->Z, 1->Y, 2->X
-                                axis_slot = int(np.argmax(np.abs(ax)))
+                            # Always ZYX slot 0. The visual model composes
+                            # parent @ T1 @ R(euler) @ T2_inv, the same product
+                            # the dynamics poses use, where the joint rotation
+                            # is Rz(theta) in the joint frame by construction --
+                            # T1 already carries the physical axis direction, so
+                            # R(euler) must be a pure Z rotation whatever that
+                            # direction is. Selecting the slot from the axis
+                            # vector rotated the rendered body about the joint
+                            # frame's X or Y axis instead, so the setup-tab
+                            # preview showed a deflected revolute joint bent in
+                            # the wrong plane relative to what was simulated.
+                            axis_slot = 0
                             break
                     euler_angles[axis_slot] = q[idx]
                     jstates[midx][jname] = euler_angles
