@@ -1,6 +1,6 @@
 # ui_run_tab.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.0 
+# Version: 1.1 
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import tkinter as tk
@@ -278,6 +278,8 @@ class RunnerTab(ttk.Frame):
                 f.write(f"Time step (dt): {self.app.engine.dt} seconds\n")
                 f.write(f"Friction coefficient: {self.app.engine.friction_coef}\n")
                 f.write(f"Contact damping: {self.app.engine.contact_damping} N*s/m\n")
+                f.write(f"Steps with clamped accelerations (should be 0): "
+                        f"{getattr(self.app.engine, 'qddot_clamp_count', 0)}\n")
                 f.write(f"Total simulation steps: {len(self.app.engine.state_history)}\n")
                 f.write(f"Total contacts recorded: {sum(len(c) for c in self.app.engine.contact_history)}\n")
                 f.write(f"Total joint constraints: {len(self.app.engine.joint_constraints)}\n\n")
