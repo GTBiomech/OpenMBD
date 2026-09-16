@@ -1,6 +1,6 @@
 # physics_engine.py  
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.6 
+# Version: 1.7 
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import numpy as np
@@ -104,6 +104,7 @@ class PhysicsEngine:
         self.step_count = 0
         self.contacts = []
         self.joint_constraints = []   # alias kept for export_csv compatibility
+        self.qddot_clamp_count = 0    # steps whose qddot hit QDDOT_LIMIT
 
 
         self.enable_self_contact = False
@@ -185,6 +186,9 @@ class PhysicsEngine:
     # Pulse width substituted when a prescribed torque is given duration=0.
     # Keeps the delivered angular impulse independent of the timestep.
     MIN_TORQUE_PULSE = 1e-3   # s
+
+    # Generalised-acceleration safety clamp (see step()).
+    QDDOT_LIMIT = 1e5
 
     @staticmethod
     def _joint_R2T(jinfo):
@@ -326,6 +330,7 @@ class PhysicsEngine:
         self.state       = self.initial_state.copy()
         self.time        = 0.0
         self.step_count  = 0
+        self.qddot_clamp_count = 0
         self.contacts    = []
         self.state_history   = []
         self.contact_history = []
@@ -2309,7 +2314,25 @@ class PhysicsEngine:
         except np.linalg.LinAlgError:
             qddot = np.linalg.pinv(A) @ B
 
-        qddot = np.clip(qddot, -1e5, 1e5)
+        # Safety clamp.  A generalised acceleration this large means the step
+        # has already gone unstable (dt too large for the contact stiffness,
+        # or a degenerate model), and clamping it means the equations of
+        # motion are no longer satisfied.  It is kept to stop a blow-up from
+        # producing NaNs mid-run, but it is no longer silent: every clamped
+        # step is counted and the first one raises a warning, so results
+        # from such a run are not mistaken for valid ones.
+        if not np.all(np.isfinite(qddot)) or np.max(np.abs(qddot)) > self.QDDOT_LIMIT:
+            self.qddot_clamp_count += 1
+            if self.qddot_clamp_count == 1:
+                import warnings
+                warnings.warn(
+                    f"generalised acceleration exceeded {self.QDDOT_LIMIT:g} at "
+                    f"t = {self.time:.6f} s and was clamped; the simulation is "
+                    f"likely unstable (try a smaller dt).  Clamped steps are "
+                    f"counted in PhysicsEngine.qddot_clamp_count.", RuntimeWarning)
+            qddot = np.nan_to_num(qddot, nan=0.0,
+                                  posinf=self.QDDOT_LIMIT, neginf=-self.QDDOT_LIMIT)
+            qddot = np.clip(qddot, -self.QDDOT_LIMIT, self.QDDOT_LIMIT)
 
         # Steps 7–8: record forces using pre-integration state (Fix 5)
         # body.vel is still v(t) here — temporally consistent with the forces
