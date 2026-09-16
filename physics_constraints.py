@@ -1,6 +1,6 @@
 # physics_constraints.py  
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.1 
+# Version: 1.2 
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import numpy as np
@@ -21,6 +21,25 @@ def clear_contact_cache():
     """Call this when resetting the simulation to initial conditions."""
     global _contact_state_cache
     _contact_state_cache.clear()
+
+
+def prune_contact_cache(active_keys):
+    """
+    Drop hysteresis state for every contact pair that was NOT detected in the
+    current step.
+
+    A pair is only instantiated while its penetration exceeds -slop, and its
+    state was reset (pen_max = 0) only on a step where it was detected with
+    penetration <= 0.  If the surfaces separated faster than slop/dt in one
+    step (1 mm per 0.1 ms = 10 m/s at the default settings, or less with a
+    larger dt) that reset never ran, so on the NEXT impact of the same pair
+    pen < stale pen_max selected the UNLOADING branch from first touch and
+    the contact transmitted only eta = 25 % of its loading force.  Entries
+    for bodies from a previous engine build also accumulated indefinitely.
+    """
+    stale = [k for k in _contact_state_cache if k not in active_keys]
+    for k in stale:
+        del _contact_state_cache[k]
 
 
 def _contact_key(bodyA, ell_nameA, bodyB, ell_nameB):
@@ -123,18 +142,25 @@ def _combined_curve(curve_a, curve_b):
     return combined[unique_idx]
 
 
-# Module-level cache: (id(curve_a), id(curve_b)) -> combined curve.
-# Valid as long as curve arrays are not mutated (they are read-only numpy arrays
-# built once at model load time).
+# Module-level cache: (id(curve_a), id(curve_b)) -> (curve_a, curve_b, combined).
+# The input arrays are stored alongside the result.  Keying on id() alone is
+# unsafe: when a model is reloaded (every rebuild_physics() creates new
+# EllipsoidGeometry arrays) the old arrays are garbage-collected and CPython
+# may hand the same id() to a new array holding a DIFFERENT characteristic,
+# which would silently return a stale combined curve.  Holding references
+# keeps the ids unique for the lifetime of the entry, and the identity check
+# guards against any residual mismatch.
 _combined_curve_cache = {}
 
 
 def _get_combined_curve(curve_a, curve_b):
     """Return cached combined curve for (curve_a, curve_b) pair."""
     key = (id(curve_a), id(curve_b))
-    if key not in _combined_curve_cache:
-        _combined_curve_cache[key] = _combined_curve(curve_a, curve_b)
-    return _combined_curve_cache[key]
+    entry = _combined_curve_cache.get(key)
+    if entry is None or entry[0] is not curve_a or entry[1] is not curve_b:
+        entry = (curve_a, curve_b, _combined_curve(curve_a, curve_b))
+        _combined_curve_cache[key] = entry
+    return entry[2]
 
 
 def _hysteresis_force(curve, penetration, pen_max, energy_retention=0.25,
