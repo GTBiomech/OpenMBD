@@ -1,10 +1,10 @@
 # physics_engine.py  
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.5
+# Version: 1.6 
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import numpy as np
-from physics_constraints import SimpleContact, clear_contact_cache
+from physics_constraints import SimpleContact, clear_contact_cache, prune_contact_cache
 from physics_joint_limits import compute_joint_limit_torques as _jl_compute_joint_limit_torques
 from physics_utils import quat_to_matrix, matrix_to_quat, skew
 
@@ -176,11 +176,30 @@ class PhysicsEngine:
     # the single source of truth; there is no duplicate table here.
     # ------------------------------------------------------------------
 
+    # Contact-normal refinement (see _ellipsoid_pair_contact).
+    CONTACT_NORMAL_ITERS = 12
+    CONTACT_NORMAL_TOL   = 1e-7   # m, tangential gradient norm
+
     JOINT_PASSIVE_D = 40.0   # N*m*s / rad – within-ROM passive damping
 
     # Pulse width substituted when a prescribed torque is given duration=0.
     # Keeps the delivered angular impulse independent of the timestep.
     MIN_TORQUE_PULSE = 1e-3   # s
+
+    @staticmethod
+    def _joint_R2T(jinfo):
+        """
+        Transpose of the rotation block of a joint's T2 (child-side joint
+        frame).  Maps a vector resolved in the CHILD body frame into the
+        rotating joint frame in which the joint quaternion is defined:
+            omega_joint = R_T2^T @ omega_child.
+        Cached on the joint-info dict.
+        """
+        R2T = jinfo.get('_R2T')
+        if R2T is None:
+            R2T = np.asarray(jinfo['T2'], dtype=float)[:3, :3].T.copy()
+            jinfo['_R2T'] = R2T
+        return R2T
 
     def _compute_passive_damping_torques(self, qdot: np.ndarray) -> np.ndarray:
         """
@@ -372,11 +391,26 @@ class PhysicsEngine:
                     # instead of silently driving world-X (Y is unaffected
                     # either way, which is why this went unnoticed by any
                     # test that only ever drove the middle/Y component).
+                    # Same precedence as the root ANGLES above ('root_joint'
+                    # first, then the model's real root-joint name) -- the two
+                    # lookups used opposite orders.  ModelConfig.ang_vel_str
+                    # (the "ang_vel" field of a saved configuration, also
+                    # [wZ,wY,wX]) was never read at all; it is now honoured
+                    # when neither joint_vels key is present.
                     joint_vels = getattr(config, 'joint_vels', {})
-                    vel_zyx = np.array(
-                        joint_vels.get(jname,
-                        joint_vels.get('root_joint', [0.0, 0.0, 0.0]))[:3],
-                        dtype=float)
+                    if 'root_joint' in joint_vels:
+                        vel_src = joint_vels['root_joint']
+                    elif jname in joint_vels:
+                        vel_src = joint_vels[jname]
+                    else:
+                        try:
+                            vel_src = [float(x) for x in
+                                       getattr(config, 'ang_vel_str', '').split()]
+                        except ValueError:
+                            vel_src = []
+                    vel_zyx = np.zeros(3)
+                    vel_list = list(vel_src)[:3]
+                    vel_zyx[:len(vel_list)] = np.asarray(vel_list, dtype=float)
                     ang_vel_rad = vel_zyx[::-1]   # [wZ,wY,wX] -> (wX,wY,wZ)
                     self.state[self.nq+s+3 : self.nq+s+6] = ang_vel_rad
                     # qdot[s+6] = 0  (quaternion norm constraint — not a DOF)
@@ -636,7 +670,15 @@ class PhysicsEngine:
                     if key0 in self.joint_dof_map:
                         self.joint_start_idx[i], self.joint_dof[i] = self.joint_dof_map[key0]
                 continue
-            parent_name = f"{body.model_idx}_{ji['parent'].name}"
+            # Bodies are named "<config id>_<body>" by the caller, and the
+            # config id is NOT the same as model_idx (the load order) once a
+            # model has been removed in the Setup tab: deleting Model A leaves
+            # Model B with id 1 but model_idx 0.  Building the parent name
+            # from model_idx then failed to find ANY parent, so every segment
+            # became a disconnected root -- the whole model fell apart with
+            # most bodies unintegrated.  Use the body's own name prefix.
+            prefix = body.name.split('_', 1)[0]
+            parent_name = f"{prefix}_{ji['parent'].name}"
             if parent_name not in name_to_idx:
                 continue
             self.parent_idx[i]  = name_to_idx[parent_name]
@@ -809,6 +851,90 @@ class PhysicsEngine:
         scaled  = semi_axes * local_n   # element-wise: (a·nx, b·ny, c·nz)
         return float(np.linalg.norm(scaled))
 
+    @classmethod
+    def _ellipsoid_pair_contact(cls, p1, R1, r1, p2, R2, r2, slop):
+        """
+        Penetration depth, contact normal and contact point for a pair of
+        ellipsoids (centre p, orientation R, semi-axes r).
+
+        The overlap of two convex bodies along a unit direction n is
+            f(n) = h1(n) + h2(n) - d.n,      d = p2 - p1,
+        where h(n) = |diag(r) R^T n| is the ellipsoid support function.  The
+        penetration depth (minimum translation distance) is min_n f(n), and
+        the minimising n is the contact normal.
+
+        The previous implementation evaluated f at a single heuristic
+        direction (the sum of the two gradient normals at the centre offset).
+        That is exact for spheres, but because f(n) >= min f for every n it
+        always OVER-estimates the depth, and for elongated ellipsoids at
+        oblique relative orientation the error is large.  On 300 random
+        near-contact pairs (semi-axes 30-200 mm) the heuristic reported
+        penetration 2 mm too deep at the median and up to 45 mm too deep
+        (i.e. a contact force between bodies that were not touching), with
+        a normal error of 7 deg median and up to 34 deg.  A misdirected
+        normal feeds straight into the moment arm of every contact force,
+        so it biases whole-body rotation after impact.
+
+        The heuristic direction is kept as the starting point and refined by
+        projected gradient descent on the unit sphere with a backtracking
+        step (monotone in f), which reduces the errors on the same test set
+        to 0.01 mm / 0.7 deg (90th percentile).  Because the start value is
+        an upper bound on the true depth, pairs whose heuristic depth is
+        already below -slop are rejected without refinement, so the extra
+        cost is paid only for pairs that are genuinely in or near contact.
+
+        Returns (pen, normal, cp) with `normal` the geometric direction from
+        ellipsoid 1 towards ellipsoid 2, or None if pen <= -slop.  `cp` is
+        the midpoint of the two support points, which at the optimum lie on
+        a common line along `normal` a distance `pen` apart.
+        """
+        d = p2 - p1
+        n1 = cls._ellipsoid_surface_normal(d, R1, r1)
+        n2 = -cls._ellipsoid_surface_normal(-d, R2, r2)
+        n = n1 + n2
+        nlen = np.linalg.norm(n)
+        n = n / nlen if nlen > 1e-12 else n1
+
+        M1 = (R1 * (r1 * r1)) @ R1.T
+        M2 = (R2 * (r2 * r2)) @ R2.T
+
+        def _eval(nv):
+            m1 = M1 @ nv
+            m2 = M2 @ nv
+            h1 = np.sqrt(max(float(nv @ m1), 1e-30))
+            h2 = np.sqrt(max(float(nv @ m2), 1e-30))
+            return h1 + h2 - float(d @ nv), m1 / h1 + m2 / h2 - d, h1, h2, m1, m2
+
+        f, g, h1, h2, m1, m2 = _eval(n)
+        if f <= -slop:
+            return None
+
+        L1 = float(np.max(r1)) ** 2
+        L2 = float(np.max(r2)) ** 2
+        for _ in range(cls.CONTACT_NORMAL_ITERS):
+            gt = g - float(g @ n) * n
+            if float(gt @ gt) < cls.CONTACT_NORMAL_TOL ** 2:
+                break
+            eta = 1.0 / (L1 / h1 + L2 / h2 + abs(float(d @ n)))
+            accepted = False
+            for _bt in range(6):
+                nn = n - eta * gt
+                nn = nn / np.sqrt(float(nn @ nn))
+                fn, gn, hn1, hn2, mn1, mn2 = _eval(nn)
+                if fn <= f:
+                    accepted = True
+                    break
+                eta *= 0.5
+            if not accepted:
+                break
+            n, f, g, h1, h2, m1, m2 = nn, fn, gn, hn1, hn2, mn1, mn2
+
+        if f <= -slop:
+            return None
+        s1 = p1 + m1 / h1          # support point of ellipsoid 1 along +n
+        s2 = p2 - m2 / h2          # support point of ellipsoid 2 along -n
+        return f, n, 0.5 * (s1 + s2)
+
     def _build_adjacency_exclusions(self):
         """
         Build a set of (i, j) body-index pairs that should NOT generate
@@ -888,15 +1014,10 @@ class PhysicsEngine:
                             continue
                         if dist > r1_max + float(np.max(r2)) + self.contact_penetration_slop:
                             continue
-                        n1 =  self._ellipsoid_surface_normal( d, R1, r1)
-                        n2 = -self._ellipsoid_surface_normal(-d, R2, r2)
-                        normal = n1 + n2
-                        nlen = np.linalg.norm(normal)
-                        normal = normal / nlen if nlen > 1e-12 else n1
-                        r1_eff = self._ellipsoid_radial_extent(r1, R1, normal)
-                        r2_eff = self._ellipsoid_radial_extent(r2, R2, normal)
-                        pen = (r1_eff + r2_eff) - np.dot(d, normal)
-                        if pen > 0.0:
+                        hit = self._ellipsoid_pair_contact(p1, R1, r1, p2, R2, r2,
+                                                           0.0)
+                        if hit is not None and hit[0] > 0.0:
+                            pen = hit[0]
                             key = _contact_key(b1, e1.name, b2, e2.name)
                             self._initial_pen_offsets[key] = max(
                                 self._initial_pen_offsets.get(key, 0.0), pen)
@@ -971,57 +1092,23 @@ class PhysicsEngine:
                         if dist > r1_bound + r2_bound + self.contact_penetration_slop:
                             continue
 
-                        # Gradient-based surface normals
-                        n1 =  self._ellipsoid_surface_normal( d, R1, r1)
-                        n2 = -self._ellipsoid_surface_normal(-d, R2, r2)
-                        normal = n1 + n2
-                        nlen = np.linalg.norm(normal)
-                        normal = normal / nlen if nlen > 1e-12 else n1
-
-                        # `normal` above is the geometric direction FROM body A
-                        # TOWARD body B (for spheres this is +d/|d|).
-                        # The contact object stores the REPULSION normal for bodyA,
-                        # which must point FROM the contact surface INTO bodyA,
-                        # i.e. the OPPOSITE of the A→B geometric direction.
-                        force_normal = -normal   # points: B→A (into bodyA, repulsive)
-                        # Sanity check: force_normal should point roughly from
-                        # bodyB centroid toward bodyA centroid.
-                        # Sanity check only.  This was an assert, but it fires
-                        # on legitimate deep-overlap configurations (where the
-                        # gradient normal genuinely reverses) and an
-                        # AssertionError inside the simulation thread kills the
-                        # run with no recovery.  Warn and carry on instead.
-                        _d_AB = b1.pos - b2.pos  # vector A←B
-                        if np.dot(force_normal, _d_AB) < -0.5:
-                            import warnings
-                            warnings.warn(
-                                f"contact normal points toward bodyB, not bodyA "
-                                f"(dot={np.dot(force_normal, _d_AB):.3f}); "
-                                f"bodies {b1.name}, {b2.name}", RuntimeWarning)
-
-                        # BF-4: correct directional effective radii
-                        r1_eff = self._ellipsoid_radial_extent(r1, R1, normal)
-                        r2_eff = self._ellipsoid_radial_extent(r2, R2, normal)
-                        pen = (r1_eff + r2_eff) - np.dot(d, normal)
-
-                        if pen > -self.contact_penetration_slop:
-                            # Contact point: MIDPOINT of the overlap, i.e. the
-                            # average of the two surface points along the
-                            # normal -- not a point on ellipsoid A alone.
-                            #
-                            # cp = p1 + normal*r1_eff put the contact on A's
-                            # surface, measured from A's centre.  For B that
-                            # point is neither on its surface nor on the line
-                            # through its centre, so the NORMAL force exerted a
-                            # torque about B's CG.  On the MADYMO ball-kick that
-                            # gave a perfect sphere 0.0705 N.m.s of spin from the
-                            # normal force alone (impossible: a sphere's contact
-                            # normal passes through its centre), 3x the friction
-                            # contribution and 65% of the ball's total spin.
-                            # The midpoint lies on the line of centres for two
-                            # spheres, so the normal torque vanishes identically.
-                            cp = 0.5 * ((p1 + normal * r1_eff)
-                                        + (p2 - normal * r2_eff))
+                        hit = self._ellipsoid_pair_contact(
+                            p1, R1, r1, p2, R2, r2, self.contact_penetration_slop)
+                        if hit is not None:
+                            pen, normal, cp = hit
+                            # `normal` is the geometric direction FROM ellipsoid A
+                            # TOWARD ellipsoid B.  The contact object stores the
+                            # REPULSION normal for bodyA, which points from the
+                            # contact surface INTO bodyA, i.e. the opposite.
+                            # (A former sanity check compared this with the
+                            # body-CG offset and could warn spuriously for
+                            # multi-ellipsoid bodies; for the ellipsoid centres
+                            # force_normal . (p1 - p2) > 0 holds by construction.)
+                            force_normal = -normal
+                            # Contact point: midpoint of the two support points,
+                            # which lie on a common line along the normal.  For
+                            # two spheres this is on the line of centres, so the
+                            # normal force exerts no torque about either centre.
                             # For same-model pairs: subtract the permanent
                             # initial-overlap offset so resting body-region
                             # ellipsoids (which overlap by design) generate no
@@ -1054,7 +1141,15 @@ class PhysicsEngine:
                     (Rm[2, 2] * r[2]) ** 2))
                 pen = -(pos[2] - z_ext)
                 if pen > -self.contact_penetration_slop:
-                    cp = np.array([pos[0], pos[1], pos[2] - z_ext])
+                    # Lowest point of the ellipsoid: its support point along
+                    # -z, i.e. pos - R diag(r^2) R^T e_z / z_ext.  The previous
+                    # point (pos.x, pos.y, pos.z - z_ext) is correct only when a
+                    # principal axis is vertical; for a tilted elongated
+                    # ellipsoid (foot, thigh, torso of a falling body) it put
+                    # the ground reaction under the centre instead of under the
+                    # heel/toe, removing the restoring moment it should exert.
+                    col = (Rm * (r * r)) @ Rm[2, :]
+                    cp = pos - col / max(z_ext, 1e-12)
 
                     gkey = (body.name, ell.name)
                     pen0 = (self._initial_ground_offsets.get(gkey, 0.0)
@@ -1068,6 +1163,7 @@ class PhysicsEngine:
                         damping=self.contact_damping,
                         energy_retention=self.contact_energy_retention))
         self.contacts = contacts
+        prune_contact_cache({c._cache_key for c in contacts})
         self._build_contact_index()
         return contacts
 
@@ -1909,6 +2005,12 @@ class PhysicsEngine:
                             + np.cross(alpha[pi], r_tot)
                             + np.cross(omega[pi], np.cross(omega[pi], r_tot)))
 
+        # Keep the velocity-product (qddot = 0) accelerations: the TOTAL body
+        # acceleration is  a_i = A1[i] @ qddot + a_bias[i]  (likewise alpha),
+        # which _compute_body_accelerations needs.
+        self._bias_lin_acc = a
+        self._bias_ang_acc = alpha
+
         # ── Backward pass ─────────────────────────────────────────────
         f   = [np.zeros(3) for _ in range(nb)]
         tau = [np.zeros(3) for _ in range(nb)]
@@ -2132,6 +2234,7 @@ class PhysicsEngine:
     def assemble_A_and_B(self, q, qdot, t):
         nq = self.nq
         A1, A2 = self.compute_a1_a2_analytic(q, qdot)
+        self._last_jacobians = (A1, A2)   # reused by _compute_body_accelerations
 
         A = np.zeros((nq, nq))
         for i, body in enumerate(self.bodies):
@@ -2221,13 +2324,29 @@ class PhysicsEngine:
         # Step 10: Symplectic Euler integration
         qdot_new = qdot + self.dt * qddot
 
-        # Integrate q — quaternion DOFs (root free joint and spherical joints) need special treatment
+        q_new = self._integrate_positions(q, qdot_new, self.dt)
+
+        self.state     = np.concatenate([q_new, qdot_new])
+        self.time     += self.dt
+        self.step_count += 1
+
+        # Step 11: update display state to t+dt (body.vel = v(t+dt))
+        self.update_kinematics_from_q(q_new)
+        self._update_body_velocities_from_qdot(q_new, qdot_new)
+
+    def _integrate_positions(self, q, qdot_new, dt):
+        """
+        Position update of Symplectic Euler: q_new = q + dt * qdot_new, with
+        the quaternion DOFs (free root, spherical joints) advanced on SO(3)
+        and re-normalised.  Factored out of step() so the kinematic mapping
+        can be verified independently of the dynamics.
+        """
         q_new = q.copy()
         for (midx, jname, jinfo, dof) in self.joint_list:
             s, _ = self.joint_dof_map[(midx, jname)]
             if jinfo.get('is_root_joint', False) and dof == 7:
                 # Translation: Euler as normal
-                q_new[s:s+3] = q[s:s+3] + self.dt * qdot_new[s:s+3]
+                q_new[s:s+3] = q[s:s+3] + dt * qdot_new[s:s+3]
                 # ROOT quaternion kinematics: qdot[s+3:s+6] is an ABSOLUTE
                 # angular velocity resolved in the fixed GLOBAL/world axes
                 # (see _update_body_velocities_from_qdot, rnea, and
@@ -2258,39 +2377,44 @@ class PhysicsEngine:
                 dqx = 0.5 * ( ox*qw + oy*qz - oz*qy)
                 dqy = 0.5 * ( oy*qw + oz*qx - ox*qz)
                 dqz = 0.5 * ( oz*qw + ox*qy - oy*qx)
-                new_q = np.array([qw + self.dt*dqw,
-                                  qx + self.dt*dqx,
-                                  qy + self.dt*dqy,
-                                  qz + self.dt*dqz])
+                new_q = np.array([qw + dt*dqw,
+                                  qx + dt*dqx,
+                                  qy + dt*dqy,
+                                  qz + dt*dqz])
                 q_new[s+3:s+7] = new_q / np.linalg.norm(new_q)   # re-normalise
             elif dof == 4 and not jinfo.get('is_root_joint', False):
                 # Spherical joint stored as quaternion [qw,qx,qy,qz].
                 # qdot[s:s+3] = omega in child LOCAL frame; qdot[s+3] = 0 (norm slot).
                 qw, qx, qy, qz = q[s:s+4]
-                # Convert local omega to world frame for quaternion derivative
-                # omega_world = R @ omega_local, but we can use the quaternion directly:
-                # dq/dt = 0.5 * q ⊗ [0, omega_local]
-                ox, oy, oz = qdot_new[s:s+3]
+                # qdot[s:s+3] is the RELATIVE angular velocity resolved in the
+                # CHILD body frame (the dynamics use omega_rel_world =
+                # R_child @ qdot[s:s+3]; see _update_body_velocities_from_qdot,
+                # rnea and compute_a1_a2_analytic).  The stored quaternion,
+                # however, is the JOINT rotation R_j in
+                #     R_child = R_parent @ R_T1 @ R_j @ R_T2^T,
+                # whose own body-frame rate omega_j satisfies
+                #     R_parent @ R_T1 @ R_j @ omega_j = R_child @ R_T2 @ omega_j.
+                # Hence omega_j = R_T2^T @ omega_child.  Feeding omega_child
+                # straight into dq/dt = 0.5 q (x) omega is only valid when T2
+                # carries no rotation.  Every joint in the bundled human models
+                # has R_T2 = diag(1,-1,-1), so the Y and Z components were
+                # integrated with the WRONG SIGN: the pose rotated opposite to
+                # the velocity the equations of motion were solving for.
+                ox, oy, oz = self._joint_R2T(jinfo) @ qdot_new[s:s+3]
                 dqw = 0.5 * (-qx*ox - qy*oy - qz*oz)
                 dqx = 0.5 * ( qw*ox - qz*oy + qy*oz)
                 dqy = 0.5 * ( qz*ox + qw*oy - qx*oz)
                 dqz = 0.5 * (-qy*ox + qx*oy + qw*oz)
-                new_q = np.array([qw + self.dt*dqw,
-                                  qx + self.dt*dqx,
-                                  qy + self.dt*dqy,
-                                  qz + self.dt*dqz])
+                new_q = np.array([qw + dt*dqw,
+                                  qx + dt*dqx,
+                                  qy + dt*dqy,
+                                  qz + dt*dqz])
                 q_new[s:s+4] = new_q / np.linalg.norm(new_q)   # re-normalise
             else:
                 s, dof_j = self.joint_dof_map[(midx, jname)]
-                q_new[s:s+dof_j] = q[s:s+dof_j] + self.dt * qdot_new[s:s+dof_j]
+                q_new[s:s+dof_j] = q[s:s+dof_j] + dt * qdot_new[s:s+dof_j]
 
-        self.state     = np.concatenate([q_new, qdot_new])
-        self.time     += self.dt
-        self.step_count += 1
-
-        # Step 11: update display state to t+dt (body.vel = v(t+dt))
-        self.update_kinematics_from_q(q_new)
-        self._update_body_velocities_from_qdot(q_new, qdot_new)
+        return q_new
 
     # ------------------------------------------------------------------
     # Per-body acceleration and contact force helpers
@@ -2300,17 +2424,32 @@ class PhysicsEngine:
         """
         Map generalised accelerations qddot -> per-body Cartesian accelerations.
 
-        Uses the velocity Jacobians A1, A2:
-          a_CG_i  = A1[i] @ qddot   (linear  acceleration, world frame)
-          alpha_i = A2[i] @ qddot   (angular acceleration, world frame)
+          a_CG_i  = A1[i] @ qddot + a_bias_i
+          alpha_i = A2[i] @ qddot + alpha_bias_i
 
-        Results are stored in body.lin_accel and body.ang_accel.
-        These are total accelerations (gravity + inertial + contact).
+        where the bias terms are the velocity-product (centripetal, Coriolis
+        and joint-transport) accelerations from the RNEA forward pass with
+        qddot = 0.  They were previously omitted, so recorded linear and
+        angular accelerations were wrong whenever segments rotated -- on a
+        free-flying model with ~3 rad/s joint rates the recorded values
+        differed from the finite-difference acceleration by 84 m/s^2 and
+        133 rad/s^2.  Head acceleration output is exactly where this matters.
+
+        Must be called after assemble_A_and_B() for the same (q, qdot).
+        Results are stored in body.lin_accel and body.ang_accel (world frame).
         """
-        A1, A2 = self.compute_a1_a2_analytic(q, self.state[self.nq:])
+        jac = getattr(self, '_last_jacobians', None)
+        if jac is None:
+            jac = self.compute_a1_a2_analytic(q, self.state[self.nq:])
+        A1, A2 = jac
+        a_b = getattr(self, '_bias_lin_acc', None)
+        al_b = getattr(self, '_bias_ang_acc', None)
         for i, body in enumerate(self.bodies):
             body.lin_accel = A1[i] @ qddot
             body.ang_accel = A2[i] @ qddot
+            if a_b is not None:
+                body.lin_accel = body.lin_accel + a_b[i]
+                body.ang_accel = body.ang_accel + al_b[i]
 
     def _accumulate_contact_forces_on_bodies(self):
         """
