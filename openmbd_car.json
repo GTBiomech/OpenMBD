@@ -10398,7 +10398,7 @@
     "name": "OpenMBD Car Model",
     "version": "1.0.0",
     "description": "Multi-rigid-body car model for pedestrian impact simulation.",
-    "license": "MIT License",
+    "license": "GNU General Public License v3 License",
     "contact": "Dr Gregory Tierney (g.tierney@ulster.ac.uk)"
   }
 }
