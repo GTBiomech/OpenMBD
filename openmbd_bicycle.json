@@ -2325,7 +2325,7 @@
     "name": "OpenMBD Bicycle Model",
     "version": "1.0.0",
     "description": "Open-source male multibody dynamics model",
-    "license": "MIT License",
+    "license": "GNU General Public License v3",
     "contact": "Dr Gregory Tierney (g.tierney@ulster.ac.uk)"
   }
 }
