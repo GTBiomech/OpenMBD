@@ -5624,7 +5624,7 @@
     "name": "OpenMBD Female Model",
     "version": "1.0.0",
     "description": "Open-source female multibody dynamics model",
-    "license": "MIT License",
+    "license": "GNU General Public License v3 License",
     "contact": "Dr Gregory Tierney (g.tierney@ulster.ac.uk)",
     "derivation": "Derived from openmbd_male.json. Segment masses per de Leva (1996) female mass fractions relative to total body mass (77.9 kg, CDC NHANES 2021-2023); trunk residual mass distributed using male internal trunk proportions. All segment masses normalised to sum exactly to 77.9 kg (normalisation factor 0.9745, accounting for de Leva fractions summing to 102.6% when clavicle and neck are included). Inertia tensors scaled by segment mass ratio and height-ratio squared (H_f/H_m = 0.9206). Shoulder geometry narrowed by factor 0.893 (biacromial ratio, CDC-NHANES/ANSUR). Hip geometry widened by factor 1.069 (sitting hip breadth ratio, ANSUR). Lower-limb ellipsoid radii scaled by cube-root of de Leva (1996) female/male mass fraction ratio. Biacromial and biiliac width scaling per Gordon et al. (1989)."
   },
