@@ -151,6 +151,18 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 /* Axes canvas */
 #axcanvas{position:absolute;bottom:10px;left:10px;width:56px;height:56px;pointer-events:none;opacity:.7}
 
+/* Joint restraint UI */
+.jr-box{background:var(--bg2);border:1px solid var(--border);border-radius:3px;padding:8px 10px;margin-top:8px}
+.jr-title{font-family:var(--mono);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--amber);margin-bottom:4px}
+.jr-note{font-family:var(--mono);font-size:9px;color:var(--txt2);line-height:1.5;margin-bottom:6px}
+.jr-axhdr{display:grid;grid-template-columns:82px 1fr 1fr 1fr;gap:4px;margin-bottom:2px}
+.jr-axhdr span{font-family:var(--mono);font-size:9px;color:var(--txt2);text-align:center}
+.jr-chk{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--txt2);margin:6px 0}
+.jr-chk input{accent-color:var(--amber)}
+.jr-curve{border-top:1px solid var(--border);padding-top:6px;margin-top:6px}
+.jr-curve-hdr{display:flex;align-items:center;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--txtbright);margin-bottom:4px}
+.jr-btns{display:flex;gap:4px;margin-top:6px}
+
 /* Revolute joint axis UI */
 .rev-axis-banner{background:rgba(56,178,172,0.08);border:1px solid rgba(56,178,172,0.3);border-radius:3px;padding:8px 10px;margin-bottom:8px}
 .rev-axis-title{font-family:var(--mono);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--teal);margin-bottom:6px;display:flex;align-items:center;gap:6px}
@@ -1110,10 +1122,214 @@ function renderJointPanel() {
         <div style="font-family:var(--mono);font-size:9px;color:var(--txt2);margin-top:2px">
           Joint origin offset from parent CG (X=AP, Y=ML, Z=SI)
         </div>
+        ${jointRestraintHtml(j)}
       </div>
     </div>`;
   });
   panel.innerHTML = h;
+  requestAnimationFrame(drawAllJointCurves);
+}
+
+// ── Joint restraint (elastic, damping, friction) ───────────────────────
+// Stored on the joint record, all [Z, Y, X] about the PARENT body axes:
+//   stiffness N·m/rad, neutral_angle deg, damping N·m·s/rad, friction N·m,
+//   elastic_curve {Z|Y|X: [[deg, N·m], ...]} (replaces stiffness on that axis;
+//   gives the moment resisting a deflection from the neutral angle; a curve
+//   with only non-negative angles is mirrored), rom_limits (built-in
+//   range-of-motion limit, default true).  Zero / default entries are removed.
+const JR_VEC = [
+  {key:'stiffness',     lbl:'k',       unit:'N·m/rad',   step:'0.1',  min:0},
+  {key:'neutral_angle', lbl:'neutral', unit:'°',         step:'0.1',  min:null},
+  {key:'damping',       lbl:'c',       unit:'N·m·s/rad', step:'0.01', min:0},
+  {key:'friction',      lbl:'f',       unit:'N·m',       step:'0.01', min:0},
+];
+const JR_AXES = ['Z','Y','X'];
+
+function jrZYX(v) {
+  if(v === undefined || v === null) return [0,0,0];
+  if(Array.isArray(v)) return [0,1,2].map(i => Number(v[i]) || 0);
+  const x = Number(v) || 0; return [x,x,x];
+}
+
+function jrCurves(j) {
+  const c = j.elastic_curve;
+  if(!c) return {};
+  if(Array.isArray(c)) return {Z:c, Y:c, X:c};
+  const out = {};
+  JR_AXES.forEach(a => { if(Array.isArray(c[a])) out[a] = c[a]; });
+  return out;
+}
+
+function jointRestraintHtml(j) {
+  if(!(j.type === 'spherical' || j.type === 'revolute')) return '';
+  if(j.type === 'spherical' && j.parent === 'GROUND') {
+    return `<div class="jr-box"><div class="jr-note">A spherical joint to GROUND is the free root joint; no restraint is applied.</div></div>`;
+  }
+  const jn = j.name.replace(/'/g, "\\'");
+  let h = `<div class="jr-box">
+    <div class="jr-title">Restraint</div>
+    <div class="jr-note">About the PARENT body axes, right-handed. Angles are taken Y → X′ → Z″ so flexion stays unique past 90°; for a rotation about one axis they equal the joint inputs. Elastic torque = −k (angle − neutral). Friction fades in between 0.1 and 1 rad/s. All zero = free joint.${j.type==='revolute' ? ' Revolute: values are projected onto the hinge axis.' : ''}</div>
+    <div class="jr-axhdr"><span></span><span>Z</span><span>Y</span><span>X</span></div>`;
+  JR_VEC.forEach(f => {
+    const v = jrZYX(j[f.key]);
+    h += `<div class="v3row"><span class="v3lbl">${f.lbl} <span class="plbl-unit">${f.unit}</span></span>
+      ${[0,1,2].map(i => `<input class="v3inp" type="number" step="${f.step}" ${f.min!==null?`min="${f.min}"`:''} value="${+v[i].toFixed(4)}" onchange="jr_vec('${jn}','${f.key}',${i},this.value)">`).join('')}
+    </div>`;
+  });
+  h += `<label class="jr-chk"><input type="checkbox" ${j.rom_limits === false ? '' : 'checked'} onchange="jr_rom('${jn}',this.checked)"> Built-in range-of-motion limit</label>`;
+  const curves = jrCurves(j);
+  JR_AXES.forEach(ax => {
+    const pts = curves[ax];
+    if(!pts) return;
+    const cid = `jrc-${j.name}-${ax}`;
+    h += `<div class="jr-curve">
+      <div class="jr-curve-hdr"><span>Elastic curve ${ax} <span class="plbl-unit">(replaces k${ax})</span></span>
+        <span class="fcdel" title="Remove curve" onclick="jr_curveRemove('${jn}','${ax}')">✕</span></div>
+      <canvas class="fc-canvas jr-canvas" id="${cid}" data-joint="${j.name}" data-axis="${ax}" height="110"></canvas>
+      <table class="fctable"><tr><th>Δ angle (°)</th><th>Moment (N·m)</th><th></th></tr>
+      ${pts.map((p,pi) => `<tr>
+        <td><input class="fc-inp" type="number" step="1" value="${+Number(p[0]).toFixed(3)}" onchange="jr_curveSet('${jn}','${ax}',${pi},0,this.value)"></td>
+        <td><input class="fc-inp" type="number" step="0.1" value="${+Number(p[1]).toFixed(3)}" onchange="jr_curveSet('${jn}','${ax}',${pi},1,this.value)"></td>
+        <td><span class="fcdel" onclick="jr_curveDel('${jn}','${ax}',${pi})">✕</span></td></tr>`).join('')}
+      </table>
+      <button class="addbtn" style="margin-top:4px" onclick="jr_curveAddPoint('${jn}','${ax}')">＋ Point</button>
+    </div>`;
+  });
+  const missing = JR_AXES.filter(ax => !curves[ax]);
+  if(missing.length) {
+    h += `<div class="jr-btns">${missing.map(ax => `<button class="addbtn" onclick="jr_curveAdd('${jn}','${ax}')">＋ Curve ${ax}</button>`).join('')}</div>`;
+  }
+  return h + `</div>`;
+}
+
+function jrJoint(jname) { return model.joints.find(jj => jj.name === jname); }
+
+function jrClean(j) {
+  JR_VEC.forEach(f => {
+    if(j[f.key] !== undefined && jrZYX(j[f.key]).every(v => v === 0)) delete j[f.key];
+  });
+  if(j.rom_limits === true) delete j.rom_limits;
+  if(j.elastic_curve && !Array.isArray(j.elastic_curve)) {
+    JR_AXES.forEach(a => { if(j.elastic_curve[a] && !j.elastic_curve[a].length) delete j.elastic_curve[a]; });
+    if(!Object.keys(j.elastic_curve).length) delete j.elastic_curve;
+  }
+}
+
+function jrCurveDict(j) {
+  // Expand an all-axes curve into per-axis copies before editing one axis.
+  const c = jrCurves(j);
+  const out = {};
+  Object.keys(c).forEach(a => { out[a] = c[a].map(p => [Number(p[0]), Number(p[1])]); });
+  j.elastic_curve = out;
+  return out;
+}
+
+function jr_vec(jname, key, i, val) {
+  const j = jrJoint(jname); if(!j) return;
+  let v = parseFloat(val); if(isNaN(v)) v = 0;
+  const f = JR_VEC.find(f => f.key === key);
+  if(f && f.min !== null) v = Math.max(f.min, v);
+  pushUndo();
+  const arr = jrZYX(j[key]); arr[i] = v; j[key] = arr;
+  jrClean(j);
+}
+
+function jr_rom(jname, on) {
+  const j = jrJoint(jname); if(!j) return;
+  pushUndo();
+  j.rom_limits = !!on;
+  jrClean(j);
+}
+
+function jr_curveAdd(jname, ax) {
+  const j = jrJoint(jname); if(!j) return;
+  pushUndo();
+  const c = jrCurveDict(j);
+  const k = jrZYX(j.stiffness)[JR_AXES.indexOf(ax)];
+  // Start from the current linear stiffness (or 1 N·m/rad) over ±30°.
+  const kk = k > 0 ? k : 1.0;
+  const m30 = +(kk * Math.PI / 6).toFixed(3);
+  c[ax] = [[-30, -m30], [0, 0], [30, m30]];
+  renderJointPanel();
+}
+
+function jr_curveRemove(jname, ax) {
+  const j = jrJoint(jname); if(!j) return;
+  pushUndo();
+  const c = jrCurveDict(j); delete c[ax];
+  jrClean(j);
+  renderJointPanel();
+}
+
+function jr_curveSet(jname, ax, pi, col, val) {
+  const j = jrJoint(jname); if(!j) return;
+  let v = parseFloat(val); if(isNaN(v)) v = 0;
+  pushUndo();
+  const c = jrCurveDict(j);
+  c[ax][pi][col] = v;
+  c[ax].sort((a, b) => a[0] - b[0]);
+  renderJointPanel();
+}
+
+function jr_curveDel(jname, ax, pi) {
+  const j = jrJoint(jname); if(!j) return;
+  pushUndo();
+  const c = jrCurveDict(j);
+  c[ax].splice(pi, 1);
+  jrClean(j);
+  renderJointPanel();
+}
+
+function jr_curveAddPoint(jname, ax) {
+  const j = jrJoint(jname); if(!j) return;
+  pushUndo();
+  const c = jrCurveDict(j);
+  const pts = c[ax];
+  const last = pts.length ? pts[pts.length - 1] : [0, 0];
+  const prev = pts.length > 1 ? pts[pts.length - 2] : [last[0] - 10, last[1] - 1];
+  const dx = (last[0] - prev[0]) || 10;
+  const slope = (last[1] - prev[1]) / dx;
+  pts.push([+(last[0] + dx).toFixed(3), +(last[1] + 1.5 * slope * dx).toFixed(3)]);
+  renderJointPanel();
+}
+
+// Odd extension used by the simulator when only non-negative angles are given.
+function jrFullCurve(pts) {
+  const p = pts.map(q => [Number(q[0]), Number(q[1])]).sort((a, b) => a[0] - b[0]);
+  if(p.length && p[0][0] >= 0) {
+    const neg = p.filter(q => q[0] > 0).map(q => [-q[0], -q[1]]).reverse();
+    return neg.concat(p);
+  }
+  return p;
+}
+
+function drawJointCurve(canvas, pts) {
+  canvas.width = canvas.offsetWidth || 276; canvas.height = canvas.offsetHeight || 110;
+  const ctx = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#0f1318'; ctx.fillRect(0, 0, W, H);
+  const p = jrFullCurve(pts);
+  if(p.length < 2) return;
+  const xmax = Math.max(...p.map(q => Math.abs(q[0]))) || 1;
+  const ymax = Math.max(...p.map(q => Math.abs(q[1]))) || 1;
+  const tx = x => W / 2 + (x / xmax) * (W / 2 - 10);
+  const ty = y => H / 2 - (y / ymax) * (H / 2 - 10);
+  ctx.strokeStyle = '#1a2535'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
+  ctx.beginPath(); p.forEach((q, i) => i ? ctx.lineTo(tx(q[0]), ty(q[1])) : ctx.moveTo(tx(q[0]), ty(q[1])));
+  ctx.strokeStyle = '#e8a020'; ctx.lineWidth = 1.5; ctx.stroke();
+  const given = new Set(pts.map(q => Number(q[0])));
+  p.forEach(q => { ctx.beginPath(); ctx.arc(tx(q[0]), ty(q[1]), 3, 0, Math.PI * 2);
+    ctx.fillStyle = given.has(q[0]) ? '#e8a020' : '#6a8090'; ctx.fill(); });
+  ctx.fillStyle = '#4a6070'; ctx.font = '9px Syne Mono,monospace';
+  ctx.fillText(`±${xmax.toFixed(0)}°`, W - 34, H / 2 - 4);
+  ctx.fillText(`±${ymax.toFixed(1)} N·m`, W / 2 + 4, 10);
+}
+
+function drawAllJointCurves() {
+  document.querySelectorAll('.jr-canvas').forEach(c => {
+    const j = jrJoint(c.dataset.joint); if(!j) return;
+    const pts = jrCurves(j)[c.dataset.axis]; if(pts) drawJointCurve(c, pts);
+  });
 }
 
 // ── Revolute axis helpers ──────────────────────────────────────────────
@@ -1170,8 +1386,7 @@ function _buildT1WithAxis(j, newAxis) {
   //
   // With R_T2 = R_T1 the rotations cancel (T1 . T2_inv = [I | t1 - t2]), so at
   // q = 0 the parent and child frames stay parallel and only the joint offset
-  // remains -- the same convention MADYMO uses when it puts an identical
-  // ORIENT on both CRDSYS_OBJECT_1 and CRDSYS_OBJECT_2 of a JOINT.REVO.
+  // remains.
   const t2tx=j.T2[0][3], t2ty=j.T2[1][3], t2tz=j.T2[2][3];
   j.T2 = [
     [x[0], y[0], z[0], t2tx],
