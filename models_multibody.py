@@ -1,10 +1,11 @@
 # models_multibody.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.1 
+# Version: 1.2
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import numpy as np
-from geometry_mesh_generator import rotation_matrix_from_euler_axis
+from joint_conventions import bryant_matrix, joint_rotation_from_input
+from models_parser import parse_ellipsoid
 
 class MultibodyBody:
     def __init__(self, name, body_id):
@@ -82,6 +83,23 @@ class MultibodyHumanModel:
                 'child_anchor': T2[:3, 3],
                 'child': child
             }
+            # Optional joint restraint, about the parent body axes
+            # (see physics_joint_restraints.py).
+            #   stiffness N m/rad, neutral_angle deg, damping N m s/rad,
+            #   friction N m  -- scalar or [Z, Y, X]
+            #   elastic_curve [[deg, N m], ...] or {"Z": ..., "Y": ..., "X": ...}
+            #   rom_limits    bool (built-in range-of-motion limit)
+            for key in ('stiffness', 'neutral_angle', 'damping', 'friction'):
+                if key in joint_data:
+                    val = joint_data[key]
+                    if isinstance(val, (list, tuple)):
+                        joint_info[key] = [float(v) for v in val[:3]]
+                    else:
+                        joint_info[key] = float(val)
+            if 'elastic_curve' in joint_data:
+                joint_info['elastic_curve'] = joint_data['elastic_curve']
+            if 'rom_limits' in joint_data:
+                joint_info['rom_limits'] = bool(joint_data['rom_limits'])
 
             if parent_name == "GROUND" or parent_name not in self.bodies:
                 joint_info['parent'] = None
@@ -167,65 +185,58 @@ class MultibodyHumanModel:
             body = self.bodies[body_name]
 
             for ell_data in body_data.get('ellipsoids', []):
-                dims = np.array(ell_data['dimensions'])
-
-                local_T = np.array(ell_data['local_orientation'], dtype=float)
-                if local_T.shape == (4, 4):
-                    pass
-                elif local_T.shape == (3, 3):
-                    T = np.identity(4)
-                    T[:3, :3] = local_T
-                    local_T = T
-                else:
-                    local_T = np.identity(4)
-
-                local_T[:3, 3] = np.array(ell_data['local_position'])
-
-                from models_parser import extend_force_curve
-                force_curve = extend_force_curve(
-                    np.array(ell_data.get('force_curve', [[0,0],[0.01,10000]])))
-
-                raw_unload = ell_data.get('unload_curve', None)
-                unload_curve = (extend_force_curve(np.array(raw_unload))
-                                if raw_unload is not None else None)
-
-                body.ellipsoids.append({
-                    'dims': dims,
-                    'local_T': local_T,
-                    'force_curve': force_curve,
-                    'unload_curve': unload_curve,
-                    'name': ell_data.get('name', '')
-                })
+                body.ellipsoids.append(parse_ellipsoid(ell_data, default_name=''))
 
     def get_joint_rotation_matrix(self, angles_deg):
+        """
+        4x4 rotation for user input angles [phi_Z, phi_Y, phi_X] (degrees) as
+        Bryant angles (X, then Y', then Z''; right-handed).  See
+        joint_conventions.py.  Used for the root orientation, whose
+        parent axes are the global axes.
+        """
         R = np.identity(4)
-        if abs(angles_deg[0]) > 0.01:
-            R = R @ rotation_matrix_from_euler_axis('Z', angles_deg[0])
-        if abs(angles_deg[1]) > 0.01:
-            R = R @ rotation_matrix_from_euler_axis('Y', angles_deg[1])
-        if abs(angles_deg[2]) > 0.01:
-            R = R @ rotation_matrix_from_euler_axis('X', angles_deg[2])
+        R[:3, :3] = bryant_matrix(angles_deg)
         return R
 
-    def update_kinematics(self, joint_states, root_pos, root_angles=[0, 0, 0]):
+    def update_kinematics(self, joint_states, root_pos, root_angles=[0, 0, 0],
+                          joint_rotations=None, root_R=None):
+        """
+        Forward kinematics for the visual/preview model.
+
+        joint_states    : {joint_name: [phi_Z, phi_Y, phi_X] deg} user inputs,
+                          about the PARENT body axes.
+        root_angles     : root Bryant angles about the global axes.
+        joint_rotations : optional {joint_name: 3x3 internal joint rotation};
+                          used by the physics engine to push its exact state
+                          without an Euler-angle round trip.
+        root_R          : optional 3x3 root orientation (overrides root_angles).
+        """
         if not self.root_body:
             return
 
         T_root = np.identity(4)
         T_root[:3, 3] = root_pos
+        if root_R is not None:
+            T_root[:3, :3] = np.asarray(root_R, dtype=float)
+        else:
+            T_root[:3, :3] = bryant_matrix(root_angles)
 
-        R_root = self.get_joint_rotation_matrix(root_angles)
-        T_root[:3, :3] = R_root[:3, :3]
+        self._update_body_kinematics(self.root_body, T_root, joint_states,
+                                     joint_rotations or {})
 
-        self._update_body_kinematics(self.root_body, T_root, joint_states)
-
-    def _update_body_kinematics(self, body, parent_T, joint_states):
+    def _update_body_kinematics(self, body, parent_T, joint_states,
+                                joint_rotations=None):
         body.global_transform = parent_T
+        joint_rotations = joint_rotations or {}
 
         for child, joint_info in body.children:
             j_name = joint_info['name']
-            angles = joint_states.get(j_name, [0, 0, 0])
-
-            R_joint = self.get_joint_rotation_matrix(angles)
+            R_joint = np.identity(4)
+            if j_name in joint_rotations:
+                R_joint[:3, :3] = joint_rotations[j_name]
+            elif joint_info.get('type', 'fixed') != 'fixed':
+                angles = joint_states.get(j_name, [0, 0, 0])
+                R_joint[:3, :3] = joint_rotation_from_input(joint_info, angles)
             T_child = parent_T @ joint_info['T1'] @ R_joint @ joint_info['T2_inv']
-            self._update_body_kinematics(child, T_child, joint_states)
+            self._update_body_kinematics(child, T_child, joint_states,
+                                         joint_rotations)
