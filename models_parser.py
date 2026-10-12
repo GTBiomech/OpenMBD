@@ -1,51 +1,37 @@
 # models_parser.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.1 
+# Version: 1.2
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import json
 import numpy as np
 
-def extend_force_curve(curve_array, pen_max_m=0.15, plateau_fraction=0.85):
-    """
-    Parameters
-    ----------
-    curve_array : np.ndarray (N, 2)  – original [pen, force] table
-    pen_max_m   : float – maximum penetration to extend to (metres)
-    plateau_fraction : float – where the plateau starts, as a fraction of pen_max_m
 
-    Returns
-    -------
-    np.ndarray (M, 2) with M >= N.
+def extend_force_curve(curve_array, pen_max_m=None, plateau_fraction=None):
+    """
+    Validate a force-penetration table [[x, F], ...] and return it as an
+    (N, 2) float array sorted by penetration, starting at (0, 0).
+
+    The table is NOT padded.  Beyond its last point the contact model
+    extrapolates linearly with the slope of the last segment, so the force
+    keeps rising with the terminal stiffness of the characteristic instead
+    of saturating.  (pen_max_m and plateau_fraction are accepted for
+    backwards compatibility and ignored.)
     """
     curve = np.array(curve_array, dtype=float)
-    last_pen   = float(curve[-1, 0])
-    last_force = float(curve[-1, 1])
+    if curve.ndim != 2 or curve.shape[1] != 2 or len(curve) < 2:
+        raise ValueError(f"force curve must be [[x, F], ...] with at least "
+                         f"two points, got {curve_array!r}")
+    curve = curve[np.argsort(curve[:, 0], kind='stable')]
+    if np.any(np.diff(curve[:, 0]) <= 0.0):
+        raise ValueError("force curve penetration values must be strictly "
+                         "increasing")
+    if curve[0, 0] > 0.0:
+        curve = np.vstack([[0.0, 0.0], curve])
+    elif curve[0, 0] < 0.0:
+        raise ValueError("force curve must not contain negative penetration")
+    return curve
 
-    if last_pen >= pen_max_m:
-        return curve   # already covers the full range
-
-    # Extrapolate with the terminal STIFFNESS, not a constant force.
-    #
-    # The old behaviour padded the table with a plateau at `last_force`, so any
-    # contact deeper than the last tabulated point saturated.  For the MADYMO
-    # ball-kick characteristic (0 m -> 0 N, 0.01 m -> 20 N) that capped the
-    # foot-ball force at 20 N however deep the foot went: the foot sank ~41 mm
-    # into a 100 mm ball and the ball was pushed rather than kicked.  MADYMO's
-    # FUNCTION.XY extrapolates linearly, giving 82 N at the same depth.
-    #
-    # A saturating curve also means the contact exerts NO restoring stiffness
-    # once saturated, so deep penetration is unopposed and nothing stops
-    # tunnelling.  Keeping the last segment's slope is both closer to MADYMO
-    # and numerically better behaved.
-    if len(curve) >= 2 and curve[-1, 0] > curve[-2, 0]:
-        k_end = (curve[-1, 1] - curve[-2, 1]) / (curve[-1, 0] - curve[-2, 0])
-    else:
-        k_end = 0.0
-    k_end = max(k_end, 0.0)          # never extrapolate to a falling force
-
-    extra = [[pen_max_m, last_force + k_end * (pen_max_m - last_pen)]]
-    return np.vstack([curve, extra])
 
 def get_text_as_array(text):
     """Convert a space-separated string of numbers to a NumPy array."""
@@ -54,8 +40,45 @@ def get_text_as_array(text):
     try:
         clean = text.replace('|', ' ').replace('\n', ' ').strip()
         return np.array([float(x) for x in clean.split()])
-    except:
+    except (ValueError, AttributeError):
         return np.zeros(3)
+
+
+def parse_ellipsoid(ell_data, default_name='unnamed'):
+    """Common ellipsoid record used by the parser and the visual model."""
+    dims = np.array(ell_data['dimensions'], dtype=float)
+
+    local_T = np.array(ell_data.get('local_orientation', np.eye(4)), dtype=float)
+    if local_T.shape == (4, 4):
+        pass
+    elif local_T.shape == (3, 3):
+        T = np.identity(4)
+        T[:3, :3] = local_T
+        local_T = T
+    else:
+        local_T = np.identity(4)
+    local_T[:3, 3] = np.array(ell_data.get('local_position', [0.0, 0.0, 0.0]),
+                              dtype=float)
+
+    force_curve = extend_force_curve(
+        ell_data.get('force_curve', [[0, 0], [0.01, 10000]]))
+    raw_unload = ell_data.get('unload_curve', None)
+    unload_curve = (extend_force_curve(raw_unload)
+                    if raw_unload is not None else None)
+
+    rec = {
+        'dims': dims,
+        'local_T': local_T,
+        'force_curve': force_curve,
+        'unload_curve': unload_curve,
+        'name': ell_data.get('name', default_name),
+    }
+    if 'hysteresis_slope' in ell_data:
+        rec['hysteresis_slope'] = float(ell_data['hysteresis_slope'])
+    if 'elastic_limit' in ell_data:
+        rec['elastic_limit'] = float(ell_data['elastic_limit'])
+    return rec
+
 
 class JSONModelParser:
     def __init__(self, json_path):
@@ -74,36 +97,8 @@ class JSONModelParser:
             if len(inertia) < 6:
                 inertia = np.array([0.01, 0.01, 0.005, 0, 0, 0])
 
-            ellipsoids = []
-            for ell_data in body_data.get('ellipsoids', []):
-                dims = np.array(ell_data['dimensions'])
-
-                local_T = np.array(ell_data['local_orientation'], dtype=float)
-                if local_T.shape == (4, 4):
-                    pass
-                elif local_T.shape == (3, 3):
-                    T = np.identity(4)
-                    T[:3, :3] = local_T
-                    local_T = T
-                else:
-                    local_T = np.identity(4)
-
-                local_T[:3, 3] = np.array(ell_data['local_position'])
-
-                force_curve = extend_force_curve(
-                    np.array(ell_data.get('force_curve', [[0, 0], [0.01, 10000]])))
-
-                raw_unload = ell_data.get('unload_curve', None)
-                unload_curve = (extend_force_curve(np.array(raw_unload))
-                                if raw_unload is not None else None)
-
-                ellipsoids.append({
-                    'dims': dims,
-                    'local_T': local_T,
-                    'force_curve': force_curve,
-                    'unload_curve': unload_curve,
-                    'name': ell_data.get('name', 'unnamed')
-                })
+            ellipsoids = [parse_ellipsoid(e)
+                          for e in body_data.get('ellipsoids', [])]
 
             self.bodies[body_name] = {
                 'mass': body_data['mass'],
