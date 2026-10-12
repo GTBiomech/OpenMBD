@@ -1,18 +1,30 @@
-# physics_engine.py  
+# physics_engine.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.7 
+# Version: 2.0
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import numpy as np
-from physics_constraints import SimpleContact, clear_contact_cache, prune_contact_cache
+from physics_constraints import SimpleContact, contact_key
 from physics_joint_limits import compute_joint_limit_torques as _jl_compute_joint_limit_torques
+import physics_joint_restraints as _jr
 from physics_utils import quat_to_matrix, matrix_to_quat, skew
+from joint_conventions import (bryant_matrix, zyx_slots_to_xyz,
+                               revolute_scalar_from_input,
+                               joint_rotation_from_input,
+                               parent_vector_to_child)
 
 
 class PhysicsEngine:
     """
     Multibody dynamics engine based on the Principle of Virtual Power.
     Uses analytic ZYX-Euler Jacobians and Recursive Newton-Euler for bias.
+
+    User inputs (initial joint angles, initial joint angular velocities and
+    prescribed joint torques) are right-handed, with Bryant X-Y'-Z'' angles
+    about the PARENT body axes and velocities and torques about the parent
+    axes.  See joint_conventions.py.  Internally the state
+    is unchanged: spherical joints are quaternions in the model's joint frame
+    with angular velocity resolved in the child body frame.
     """
 
     def __init__(self):
@@ -35,18 +47,18 @@ class PhysicsEngine:
 
         # ── Timestep ──────────────────────────────────────────────────
 
-        self.dt = 0.00001                             
+        self.dt = 0.00001
         self.record_every = 10   # record one state per this many integration steps
 
         self.time = 0.0
 
         # ── Friction ──────────────────────────────────────────────────
- 
-        self.friction_coef = 0.4                     
+
+        self.friction_coef = 0.4
 
         # ── Contact penetration slop ──────────────────────────────────
 
-        self.contact_penetration_slop = 0.001        
+        self.contact_penetration_slop = 0.001
 
         # ── Contact damping ───────────────────────────────────────────
 
@@ -55,15 +67,17 @@ class PhysicsEngine:
         # ── Prescribed joint torques ──────────────────────────────────
         # Structure: list of dicts, one per torque entry:
         #   { 'model_idx': int, 'joint_name': str,
-        #     'torque': np.ndarray (dof,),   # N·m, ZYX order
+        #     'torque': np.ndarray (3,),     # N·m, slots [τZ, τY, τX] about
+        #                                    #   the PARENT axes
         #     't_start': float,              # s
         #     'duration': float }            # s (0 = single step)
         self.prescribed_torques = []
+        self._joint_restraints = {}  # (model_idx, joint) -> JointRestraint
 
         # ── Contact evaluation mode ────────────────────
         # When one ellipsoid simultaneously contacts multiple surfaces the
         # total stiffness is artificially multiplied by the contact count.
-        # 
+        #
         #
         #   'continuous' (default) – scale every simultaneous contact force
         #       by  Fe_max / ΣFe  so the total elastic force never exceeds
@@ -77,26 +91,38 @@ class PhysicsEngine:
         #   'none' – legacy behaviour: all contacts fire independently
         #       (physically correct only when ellipsoids cannot overlap).
         #
-        # The grouping unit is per-body-pair: contacts between the same
-        # (bodyA, bodyB) pair are evaluated together; contacts between
-        # different body pairs are always independent
+        # The grouping unit is one slave ellipsoid against all surfaces of one
+        # other model (or of its own model for self-contact).  The slave is
+        # the ellipsoid of the body that comes first in load order, so load
+        # the occupant/pedestrian model before the vehicle or environment.
+        # Ground contacts are always evaluated individually.
         self.contact_evaluation_mode = 'continuous'
 
-        # ── Hysteresis energy retention  ──
-        self.contact_energy_retention = 0.25
+        # ── Surfaces without an unloading curve ──
+        # None: purely elastic (loading curve used for unloading).  A number
+        # eta in (0, 1] synthesises an unloading curve eta * f_load(x).
+        self.contact_energy_retention = None
+
+        # ── Initial penetration ──
+        # Penetration present at t = 0 produces force immediately.  Set True
+        # to subtract each ellipsoid's initial ground penetration instead.
+        # Same-model overlaps are always subtracted (they only matter when
+        # enable_self_contact is True, and are overlaps by design).
+        self.ignore_initial_ground_penetration = False
+
+        # Per-pair contact history (hysteresis), kept for the whole run.
+        self._contact_states = {}
 
         # ── Dynamic Amplification Factor ──
 
         self.dyn_amp_C1 = 1.0   # static multiplier  (1.0 = no amplification)
-        self.dyn_amp_C2 = 0.0   # velocity coefficient 
+        self.dyn_amp_C2 = 0.0   # velocity coefficient
         self.dyn_amp_C3 = 1.0   # reference velocity (m/s)
         self.dyn_amp_C4 = 1.0   # exponent
-        # DAF parameters: γ = C1 + C2·(|ε̇|/C3)^C4
-        # Restored from 0.0.  C2=0 disabled rate stiffening
-        # To prevent DAF-induced instability the factor is evaluated at the
-        # PREVIOUS step's approach velocity (see _contact_magnitude); this
-        # gives an explicit (non-feedback) evaluation that is unconditionally
-        # stable for the Symplectic-Euler integrator used here.
+        # Dynamic amplification of the elastic contact force:
+        #     γ = C1 + C2·(|λ̇|/C3)^C4
+        # evaluated at the current penetration rate λ̇ (the same rate that
+        # drives the damping force).  C2 = 0 disables rate stiffening.
 
         self.state_history = []
         self.contact_history = []
@@ -169,6 +195,18 @@ class PhysicsEngine:
             [1.0,  0.0, -sb  ]
         ])
 
+    @staticmethod
+    def _zyx_matrix(a, b, g):
+        """Rz(a) @ Ry(b) @ Rx(g) -- used only by the legacy dof=3 Euler paths."""
+        ca, sa = np.cos(a), np.sin(a)
+        cb, sb = np.cos(b), np.sin(b)
+        cg, sg = np.cos(g), np.sin(g)
+        return np.array([
+            [ca*cb, ca*sb*sg - sa*cg, ca*sb*cg + sa*sg],
+            [sa*cb, sa*sb*sg + ca*cg, sa*sb*cg - ca*sg],
+            [-sb,   cb*sg,             cb*cg           ]
+        ])
+
     # ------------------------------------------------------------------
     # Physiological joint limits  (penalty-based viscoelastic stops)
     # ------------------------------------------------------------------
@@ -181,14 +219,21 @@ class PhysicsEngine:
     CONTACT_NORMAL_ITERS = 12
     CONTACT_NORMAL_TOL   = 1e-7   # m, tangential gradient norm
 
-    JOINT_PASSIVE_D = 40.0   # N*m*s / rad – within-ROM passive damping
+    # Joint restraint friction ramp (rad/s), see physics_joint_restraints.
+    # Coulomb friction is zero for |omega| <= ramp[0], rises linearly to full
+    # value at ramp[1] and is constant above it.  Removes the stick-slip
+    # discontinuity at zero rate.
+    joint_friction_ramp = (0.1, 1.0)
 
     # Pulse width substituted when a prescribed torque is given duration=0.
     # Keeps the delivered angular impulse independent of the timestep.
     MIN_TORQUE_PULSE = 1e-3   # s
 
-    # Generalised-acceleration safety clamp (see step()).
-    QDDOT_LIMIT = 1e5
+    # Generalised-acceleration blow-up guard (see step()).  Set well above any
+    # physically resolved value: in a 40 km/h pedestrian impact the hand roll
+    # DOFs reach ~1.7e5 rad/s^2 independently of dt, so a lower cap would
+    # truncate real dynamics rather than catch instability.
+    QDDOT_LIMIT = 1e7
 
     @staticmethod
     def _joint_R2T(jinfo):
@@ -205,51 +250,18 @@ class PhysicsEngine:
             jinfo['_R2T'] = R2T
         return R2T
 
-    def _compute_passive_damping_torques(self, qdot: np.ndarray) -> np.ndarray:
-        """
-        Return generalised force vector Q_passive (size nq) that applies
-        JOINT_PASSIVE_D viscous damping to every non-root joint DOF.
+    # ------------------------------------------------------------------
+    # Joint restraints (elastic, damping, friction) -- physics_joint_restraints
+    # ------------------------------------------------------------------
 
-        Q_passive[s:s+dof] = −JOINT_PASSIVE_D · qdot[s:s+dof]
-
-        This is equivalent to adding a physical dashpot across each joint
-        that resists relative angular (or linear) velocity.  Root DOFs are
-        excluded so translational free-fall and whole-body orientation
-        remain governed solely by gravity and contact forces.
-
-        NOTE: this explicit form is retained only for diagnostics and
-        backwards compatibility.  assemble_A_and_B applies the same dashpot
-        IMPLICITLY via (A + dt·D)·qddot = B − D·qdot, which is stable for any
-        D and dt.  The explicit form is NOT:  qdot += dt·(A^{-1}·B) requires
-        |1 − D·dt/A_ii| < 1, i.e. D < 2·A_ii/dt.  The binding DOFs are the
-        wrist roll axes (A_ii ≈ 8.45e-4 kg·m²), not the elbow — at
-        dt = 1e-4 s that gives D_max ≈ 16.9 N·m·s/rad, so the current
-        JOINT_PASSIVE_D = 40.0 diverges by a factor of ~2.4.
-        """
-        return -self._passive_damping_diag() * qdot
-
-    def _passive_damping_diag(self) -> np.ndarray:
-        """
-        Return the (nq,) diagonal of the passive joint-damping matrix D.
-
-        Root DOFs are zero (free-floating root takes no passive drag) and, for
-        quaternion spherical joints (dof=4), only the 3 omega DOFs are damped —
-        never the quaternion-norm constraint slot at index s+3.
-
-        Cached: depends only on topology, which is rebuilt by add_model().
-        """
-        cached = getattr(self, '_D_diag_cache', None)
-        if cached is not None and cached.shape[0] == self.nq:
-            return cached
-        D = np.zeros(self.nq)
-        for (midx, jname, jinfo, dof) in self.joint_list:
-            if jinfo.get('is_root_joint', False):
-                continue
-            s, _ = self.joint_dof_map[(midx, jname)]
-            active_dof = 3 if dof == 4 else dof
-            D[s:s + active_dof] = self.JOINT_PASSIVE_D
-        self._D_diag_cache = D
-        return D
+    def compute_joint_restraint_torques(self, q=None, qdot=None):
+        """Explicit restraint generalised force Q = Q_e(q) - D(q, qdot) qdot."""
+        if q is None:
+            q = self.state[:self.nq]
+        if qdot is None:
+            qdot = self.state[self.nq:]
+        Qe, _K, D = _jr.assemble(self, q, qdot, self.joint_friction_ramp)
+        return Qe - D @ qdot
 
     def compute_joint_limit_torques(self, q, qdot):
         """Delegate to physics_joint_limits — single source of truth for ROM."""
@@ -304,16 +316,17 @@ class PhysicsEngine:
         self.state = new_state
 
         self.joint_dof_map = {}
+        self._jinfo_by_key = {}
         start = 0
         for (midx, jname, jinfo, dof) in self.joint_list:
             self.joint_dof_map[(midx, jname)] = (start, dof)
+            self._jinfo_by_key[(midx, jname)] = jinfo
             start += dof
 
         self._build_kinematic_tree()
         # Invalidate adjacency exclusion cache — topology changed
         if hasattr(self, '_adj_exclusions'):
             del self._adj_exclusions
-        self._D_diag_cache = None   # nq changed — rebuild damping diagonal
         self._initialize_state_from_config(model_idx, config)
 
         # Snapshot AFTER config so reset_to_initial() restores correctly.
@@ -334,8 +347,8 @@ class PhysicsEngine:
         self.contacts    = []
         self.state_history   = []
         self.contact_history = []
-        # clear hysteresis cache so pen_max resets to 0
-        clear_contact_cache()
+        # Contact history restarts with the simulation.
+        self._contact_states = {}
         # Rebuild adjacency exclusion set in case topology changed
         if hasattr(self, '_adj_exclusions'):
             del self._adj_exclusions
@@ -348,8 +361,14 @@ class PhysicsEngine:
     def _initialize_state_from_config(self, model_idx, config):
         """
         Write initial q (radians) and qdot (m/s, rad/s) from ModelConfig.
-        Joint angles in config are stored in degrees (UI convention).
 
+        Input convention (see joint_conventions.py):
+          * config.joints[j]     = [phi_Z, phi_Y, phi_X] deg, Bryant angles
+                                   X -> Y' -> Z'' about the PARENT body axes
+                                   (global axes for the root), right-handed.
+          * config.joint_vels[j] = [wZ, wY, wX] rad/s about the parent axes.
+        Revolute joints take the projection of the [Z, Y, X] vector onto the
+        hinge axis (expressed in the parent body).
         """
         for (midx, jname, jinfo, dof) in self.joint_list:
             if midx != model_idx:
@@ -364,44 +383,21 @@ class PhysicsEngine:
                     self.state[s:s+3] = pos
                     ang_deg = (config.joints.get('root_joint')
                                or config.joints.get(jname, [0, 0, 0]))
-                    ang_rad = np.radians(ang_deg[:3])
-                    # Build rotation matrix from ZYX Euler, convert to quaternion.
-                    # This accepts any angles without clamping or singularity.
-                    a, b, g = ang_rad
-                    ca, sa = np.cos(a), np.sin(a)
-                    cb, sb = np.cos(b), np.sin(b)
-                    cg, sg = np.cos(g), np.sin(g)
-                    R = np.array([
-                        [ca*cb, ca*sb*sg - sa*cg, ca*sb*cg + sa*sg],
-                        [sa*cb, sa*sb*sg + ca*cg, sa*sb*cg - ca*sg],
-                        [-sb,   cb*sg,             cb*cg           ]
-                    ])
+                    # Bryant X-Y'-Z'' about the global axes.
+                    R = bryant_matrix(ang_deg)
                     self.state[s+3:s+7] = matrix_to_quat(R)   # [qw,qx,qy,qz]
                     try:
                         vel = np.array([float(x) for x in config.vel_str.split()])
                     except Exception:
                         vel = np.zeros(3)
                     self.state[self.nq+s : self.nq+s+3] = vel
-                    # Root angular velocity stored as world-frame omega (rad/s).
-                    # Read from joint_vels (same mechanism as all other joints).
-                    # joint_vels entries are supplied in the UI's [wZ,wY,wX]
-                    # label order (see ModelConfig.joint_vels docstring and
-                    # the identical convention used for joint_torques below),
-                    # but qdot[s+3:s+6] is consumed everywhere else in this
-                    # file (see _update_body_velocities_from_qdot, rnea,
-                    # compute_a1_a2_analytic, and the quaternion ODE in
-                    # step()) as a literal (omega_x, omega_y, omega_z) world
-                    # Cartesian vector. Reorder [wZ,wY,wX] -> (x,y,z) here so
-                    # the "Z"-labeled slider genuinely drives world-Z spin
-                    # instead of silently driving world-X (Y is unaffected
-                    # either way, which is why this went unnoticed by any
-                    # test that only ever drove the middle/Y component).
-                    # Same precedence as the root ANGLES above ('root_joint'
-                    # first, then the model's real root-joint name) -- the two
-                    # lookups used opposite orders.  ModelConfig.ang_vel_str
-                    # (the "ang_vel" field of a saved configuration, also
-                    # [wZ,wY,wX]) was never read at all; it is now honoured
-                    # when neither joint_vels key is present.
+                    # Root angular velocity: world-frame omega (rad/s); for a
+                    # free joint the parent is the global frame, so no
+                    # rotation is needed.  Inputs arrive in
+                    # [wZ, wY, wX] slot order and qdot[s+3:s+6] is consumed as
+                    # (wx, wy, wz) everywhere else, hence the reorder.
+                    # Precedence: 'root_joint', then the model's real root
+                    # name, then ModelConfig.ang_vel_str.
                     joint_vels = getattr(config, 'joint_vels', {})
                     if 'root_joint' in joint_vels:
                         vel_src = joint_vels['root_joint']
@@ -413,141 +409,75 @@ class PhysicsEngine:
                                        getattr(config, 'ang_vel_str', '').split()]
                         except ValueError:
                             vel_src = []
-                    vel_zyx = np.zeros(3)
-                    vel_list = list(vel_src)[:3]
-                    vel_zyx[:len(vel_list)] = np.asarray(vel_list, dtype=float)
-                    ang_vel_rad = vel_zyx[::-1]   # [wZ,wY,wX] -> (wX,wY,wZ)
-                    self.state[self.nq+s+3 : self.nq+s+6] = ang_vel_rad
+                    self.state[self.nq+s+3 : self.nq+s+6] = zyx_slots_to_xyz(vel_src)
                     # qdot[s+6] = 0  (quaternion norm constraint — not a DOF)
                 elif dof == 3:
                     ang_deg = config.joints.get(jname, [0,0,0])
                     self.state[s:s+3] = np.radians(ang_deg[:3])
                 elif dof == 1:
                     # Revolute joint to GROUND (a limb pinned to inertial
-                    # space, e.g. the hip joint of the MADYMO ball-kick leg).
-                    # Angle and rate are scalars about the joint axis; the
-                    # config supplies them in the same ZYX slot convention as
-                    # a non-root revolute.
+                    # space, e.g. the hip of a pinned leg model).
+                    # The parent is the reference space, so the [Z, Y, X]
+                    # input is projected onto the hinge axis in global axes.
                     ang_deg = (config.joints.get(jname)
                                or config.joints.get('root_joint', [0.0, 0.0, 0.0]))
-                    ax = None
-                    for k_b, body_k in enumerate(self.bodies):
-                        if body_k.model_idx == model_idx and self.bodies[k_b].name.endswith(
-                                jinfo.get('child_name', '')):
-                            ax = self.joint_axis_local[k_b]
-                            break
-                    # ZYX slot convention: slot 0 = Z, slot 1 = Y, slot 2 = X,
-                    # so an axis vector's component index i maps to slot 2 - i.
-                    # The previous expression used the component index directly,
-                    # which is correct only for a Y axis and transposed Z with X
-                    # -- a revolute joint built on a +Z axis in the model editor
-                    # took its angle from the X-labelled field and discarded the
-                    # value entered in the Z field.
-                    slot = (2 - int(np.argmax(np.abs(ax)))) if ax is not None else 0
-                    val = float(ang_deg[slot]) if slot < len(ang_deg) else 0.0
-                    self.state[s] = np.radians(val)
+                    self.state[s] = np.radians(
+                        revolute_scalar_from_input(jinfo, ang_deg))
                     jv = getattr(config, 'joint_vels', {})
                     vl = jv.get(jname, jv.get('root_joint', [0.0, 0.0, 0.0]))
-                    self.state[self.nq + s] = (float(vl[slot])
-                                               if slot < len(vl) else 0.0)
+                    self.state[self.nq + s] = revolute_scalar_from_input(jinfo, vl)
             else:
                 ang_deg = config.joints.get(jname, [0,0,0])
+                joint_vels = getattr(config, 'joint_vels', {})
                 if dof == 4:
-                    # Spherical joint stored as quaternion [qw,qx,qy,qz].
-                    # GUI provides ZYX Euler degrees; convert to quaternion.
-                    ang_rad = np.radians(ang_deg[:3])
-                    a, b, g = ang_rad
-                    ca, sa = np.cos(a), np.sin(a)
-                    cb, sb = np.cos(b), np.sin(b)
-                    cg, sg = np.cos(g), np.sin(g)
-                    R = np.array([
-                        [ca*cb, ca*sb*sg - sa*cg, ca*sb*cg + sa*sg],
-                        [sa*cb, sa*sb*sg + ca*cg, sa*sb*cg - ca*sg],
-                        [-sb,   cb*sg,             cb*cg           ]
-                    ])
-                    self.state[s:s+4] = matrix_to_quat(R)   # [qw,qx,qy,qz]
-                    # Per-joint angular velocity (rad/s) in LOCAL frame.
-                    # Same [wZ,wY,wX] -> (x,y,z) reorder as the root case
-                    # above: qdot[s:s+3] is consumed as a literal local-frame
-                    # (omega_x,omega_y,omega_z) vector (e.g.
-                    # `omega_rel = body.R @ qd_j[:3]` in
-                    # _update_body_velocities_from_qdot / rnea), so it must
-                    # not be left in the UI's Z-first label order.
-                    joint_vels = getattr(config, 'joint_vels', {})
+                    # Spherical joint stored as quaternion [qw,qx,qy,qz] of the
+                    # INTERNAL joint rotation R_j (between T1 and T2_inv).  The
+                    # user's Bryant angles are about the parent body axes, so
+                    # they are converted rather than used in the joint frame
+                    # directly -- the bundled models' joint frames have Y and
+                    # Z flipped (T1 = diag(1,-1,-1)), which made a positive
+                    # knee angle rotate the shank clockwise about the thigh's
+                    # Y axis.
+                    R_j = joint_rotation_from_input(jinfo, ang_deg)
+                    self.state[s:s+4] = matrix_to_quat(R_j)   # [qw,qx,qy,qz]
+                    # Joint angular velocity is given about the PARENT axes;
+                    # qdot[s:s+3] is the relative omega
+                    # resolved in the CHILD body frame, so rotate it across.
                     vel_zyx = joint_vels.get(jname, [0.0, 0.0, 0.0])
-                    vel_xyz = [float(v) for v in vel_zyx[:3]][::-1]
-                    self.state[self.nq+s : self.nq+s+3] = vel_xyz
+                    self.state[self.nq+s : self.nq+s+3] = parent_vector_to_child(
+                        jinfo, R_j, vel_zyx)
                     # qdot[s+3] = 0 (quaternion norm constraint slot)
                 elif dof == 1:
-                    # Revolute joint: the single DOF is the rotation angle
-                    # about the joint axis.  The UI supplies ang_deg as a
-                    # three-element ZYX Euler vector; we must project it onto
-                    # the actual joint axis stored in joint_axis_local.
-                    #
-                    # Find the body index that owns this joint so we can look
-                    # up the pre-computed child-frame axis.
-                    angle_rad = 0.0
-                    body_found = False
-                    for k_b, body_k in enumerate(self.bodies):
-                        if body_k.model_idx != model_idx:
-                            continue
-                        vis_k = body_k.name.split('_', 1)[1]
-                        vis_obj_k = self.models[model_idx].bodies.get(vis_k)
-                        if (vis_obj_k is not None and
-                                vis_obj_k.joint_name_to_parent == jname):
-                            ax = self.joint_axis_local[k_b]
-                            if ax is not None:
-                                # Dominant axis component selects ZYX Euler slot
-                                # Slot 0 = Z-rotation = ang_deg[0]
-                                # Slot 1 = Y-rotation = ang_deg[1]
-                                # Slot 2 = X-rotation = ang_deg[2]
-                                # Component index i therefore maps to slot 2 - i;
-                                # using i directly transposed Z and X (see the
-                                # matching comment in the dof == 1 root branch).
-                                slot = 2 - int(np.argmax(np.abs(ax)))
-                                deg_val = (float(ang_deg[slot])
-                                           if slot < len(ang_deg) else 0.0)
-                                angle_rad = np.radians(deg_val)
-                            else:
-                                angle_rad = np.radians(float(ang_deg[0])
-                                                       if len(ang_deg) > 0 else 0.0)
-                            body_found = True
-                            break
-                    if not body_found:
-                        # Fallback: use the first element (Z-rotation)
-                        angle_rad = np.radians(float(ang_deg[0])
-                                               if len(ang_deg) > 0 else 0.0)
-                    self.state[s] = angle_rad
-                    # Per-joint angular velocity (rad/s) — single scalar.
-                    # Read from the SAME ZYX slot the angle was read from.
-                    # This used to be hard-coded to vel_list[0], so a joint
-                    # whose axis selected slot 1 or 2 took its angle from that
-                    # slot but its rate from slot 0 -- the initial angle and
-                    # the initial velocity referred to different axes.
-                    joint_vels = getattr(config, 'joint_vels', {})
+                    # Revolute joint: the single DOF is the right-handed
+                    # rotation about the hinge axis.  Project the [Z, Y, X]
+                    # input onto that axis expressed in the parent body (the
+                    # Z column of T1), so the sign follows the parent's axes
+                    # and not the orientation of the internal joint frame.
+                    self.state[s] = np.radians(
+                        revolute_scalar_from_input(jinfo, ang_deg))
                     vel_list = joint_vels.get(jname, [0.0, 0.0, 0.0])
-                    self.state[self.nq + s] = (float(vel_list[slot])
-                                               if slot < len(vel_list) else 0.0)
+                    self.state[self.nq + s] = revolute_scalar_from_input(
+                        jinfo, vel_list)
                 else:
                     n = min(dof, len(ang_deg))
                     self.state[s:s+n] = np.radians(ang_deg[:n])
                     # Per-joint angular velocity (rad/s)
-                    joint_vels = getattr(config, 'joint_vels', {})
                     vel_rad = joint_vels.get(jname, [0.0] * dof)
                     nv = min(dof, len(vel_rad))
                     self.state[self.nq+s : self.nq+s+nv] = [
                         float(v) for v in vel_rad[:nv]
                     ]
 
-        # Load any prescribed torques defined for this model
+        # Load any prescribed torques and joint restraints for this model
         self._load_prescribed_torques_from_config(model_idx, config)
+        _jr.load(self, model_idx, config)
 
     def _load_prescribed_torques_from_config(self, model_idx, config):
         """
         Populate self.prescribed_torques from ModelConfig.joint_torques.
 
         ModelConfig.joint_torques format:
-            { joint_name: {'torque': [τZ, τY, τX],
+            { joint_name: {'torque': [τZ, τY, τX],      # about PARENT axes
                            't_start': float,
                            'duration': float}, ... }
 
@@ -658,7 +588,7 @@ class PhysicsEngine:
             if ji['parent'] is None:
                 # Root joint (parent = GROUND).  A FREE root needs nothing
                 # here, but a REVOLUTE root (a limb pinned to inertial space,
-                # e.g. the hip of the MADYMO ball-kick leg) still needs its
+                # e.g. the hip of a pinned leg model) still needs its
                 # axis and DOF slot recorded -- otherwise joint_axis_local[i]
                 # stays None and the joint silently contributes no motion.
                 if ji.get('type') == 'revolute':
@@ -824,7 +754,7 @@ class PhysicsEngine:
             body.ang_vel = omega[i].copy()
 
     # ------------------------------------------------------------------
-    # Contact detection 
+    # Contact detection
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -841,7 +771,7 @@ class PhysicsEngine:
         """
          Effective radius of an ellipsoid along the contact normal.
 
-        
+
             r_eff = ‖ semi_axes * (R^T · n̂) ‖
 
 
@@ -888,10 +818,11 @@ class PhysicsEngine:
         already below -slop are rejected without refinement, so the extra
         cost is paid only for pairs that are genuinely in or near contact.
 
-        Returns (pen, normal, cp) with `normal` the geometric direction from
-        ellipsoid 1 towards ellipsoid 2, or None if pen <= -slop.  `cp` is
-        the midpoint of the two support points, which at the optimum lie on
-        a common line along `normal` a distance `pen` apart.
+        Returns (pen, normal, s1, s2) with `normal` the geometric direction
+        from ellipsoid 1 towards ellipsoid 2, or None if pen <= -slop.  s1
+        and s2 are the deepest points of ellipsoid 1 along +normal and of
+        ellipsoid 2 along -normal; at the optimum they lie on a common line
+        along `normal` a distance `pen` apart.
         """
         d = p2 - p1
         n1 = cls._ellipsoid_surface_normal(d, R1, r1)
@@ -938,13 +869,13 @@ class PhysicsEngine:
             return None
         s1 = p1 + m1 / h1          # support point of ellipsoid 1 along +n
         s2 = p2 - m2 / h2          # support point of ellipsoid 2 along -n
-        return f, n, 0.5 * (s1 + s2)
+        return f, n, s1, s2
 
     def _build_adjacency_exclusions(self):
         """
         Build a set of (i, j) body-index pairs that should NOT generate
         contact forces because they are kinematically adjacent (parent–child
-        or grandparent–grandchild).  
+        or grandparent–grandchild).
         """
         excluded = set()
         n = len(self.bodies)
@@ -984,9 +915,10 @@ class PhysicsEngine:
     def _record_initial_overlaps(self):
         """
         Scan the current pose and record initial penetration depths for
-        all same-model ellipsoid pairs and ground contacts.
+        same-model ellipsoid pairs (used only with self-contact) and, when
+        ignore_initial_ground_penetration is set, for ground contacts.
+        Warns when the starting pose already penetrates the ground.
         """
-        from physics_constraints import _contact_key
         self._initial_pen_offsets    = {}   # cache_key -> pen_at_t0
         self._initial_ground_offsets = {}   # (body.name, ell.name) -> pen_at_t0
 
@@ -1023,11 +955,12 @@ class PhysicsEngine:
                                                            0.0)
                         if hit is not None and hit[0] > 0.0:
                             pen = hit[0]
-                            key = _contact_key(b1, e1.name, b2, e2.name)
+                            key = contact_key(b1, e1.name, b2, e2.name)
                             self._initial_pen_offsets[key] = max(
                                 self._initial_pen_offsets.get(key, 0.0), pen)
 
-        # Ground offsets — use the EXACT quadratic z-extent formula
+        # Ground penetration at t = 0
+        worst = (0.0, None)
         for body in self.bodies:
             for ell in body.ellipsoids:
                 T   = body.get_body_transform() @ ell.local_T
@@ -1038,9 +971,19 @@ class PhysicsEngine:
                     (Rm[2, 2] * r[2]) ** 2))
                 pen = -(pos[2] - z_ext)
                 if pen > 0.0:
-                    gkey = (body.name, ell.name)
-                    self._initial_ground_offsets[gkey] = max(
-                        self._initial_ground_offsets.get(gkey, 0.0), pen)
+                    if pen > worst[0]:
+                        worst = (pen, f"{body.name}/{ell.name}")
+                    if self.ignore_initial_ground_penetration:
+                        gkey = (body.name, ell.name)
+                        self._initial_ground_offsets[gkey] = max(
+                            self._initial_ground_offsets.get(gkey, 0.0), pen)
+        if worst[0] > 1e-3 and not self.ignore_initial_ground_penetration:
+            import warnings
+            warnings.warn(
+                f"initial pose penetrates the ground by {worst[0]*1000:.1f} mm "
+                f"({worst[1]}); the contact force acts from t = 0.  Raise the "
+                f"model or set ignore_initial_ground_penetration = True.",
+                RuntimeWarning)
 
     def detect_contacts(self):
         contacts = []
@@ -1049,14 +992,9 @@ class PhysicsEngine:
         if not hasattr(self, '_adj_exclusions'):
             self._build_adjacency_exclusions()
 
-        # ── All body-body contacts (inter-model AND intra-model) ──────
-        # OLD: skipped all same-model pairs → head could pass through leg.
-        # NEW: skip only kinematically adjacent pairs (≤ 2 hops in tree).
         nb = len(self.bodies)
 
-        # Each body's world transform is constant for the whole sweep, but was
-        # being recomputed inside the j- and ellipsoid-loops -- ~2000 calls per
-        # step for 42 bodies.  Compute once up front.
+        # Each body's world transform is constant for the whole sweep.
         _bt = [b.get_body_transform() for b in self.bodies]
 
         for i in range(nb):
@@ -1099,40 +1037,24 @@ class PhysicsEngine:
 
                         hit = self._ellipsoid_pair_contact(
                             p1, R1, r1, p2, R2, r2, self.contact_penetration_slop)
-                        if hit is not None:
-                            pen, normal, cp = hit
-                            # `normal` is the geometric direction FROM ellipsoid A
-                            # TOWARD ellipsoid B.  The contact object stores the
-                            # REPULSION normal for bodyA, which points from the
-                            # contact surface INTO bodyA, i.e. the opposite.
-                            # (A former sanity check compared this with the
-                            # body-CG offset and could warn spuriously for
-                            # multi-ellipsoid bodies; for the ellipsoid centres
-                            # force_normal . (p1 - p2) > 0 holds by construction.)
-                            force_normal = -normal
-                            # Contact point: midpoint of the two support points,
-                            # which lie on a common line along the normal.  For
-                            # two spheres this is on the line of centres, so the
-                            # normal force exerts no torque about either centre.
-                            # For same-model pairs: subtract the permanent
-                            # initial-overlap offset so resting body-region
-                            # ellipsoids (which overlap by design) generate no
-                            # force at rest, but genuine new contacts during
-                            # motion (arm hitting head, etc.) are still resolved.
-                            pen_eff = pen
-                            if b1.model_id == b2.model_id:
-                                from physics_constraints import _contact_key
-                                ikey = _contact_key(b1, e1.name, b2, e2.name)
-                                pen0 = (self._initial_pen_offsets.get(ikey, 0.0)
-                                        if hasattr(self, '_initial_pen_offsets')
-                                        else 0.0)
-                                pen_eff = max(0.0, pen - pen0)
-                            contacts.append(SimpleContact(
-                                b1, b2, cp, force_normal, pen_eff,
-                                friction=self.friction_coef, restitution=0.1,
-                                ellipsoidA=e1, ellipsoidB=e2,
-                                damping=self.contact_damping,
-                                energy_retention=self.contact_energy_retention))
+                        if hit is None:
+                            continue
+                        pen, normal, s1, s2 = hit
+                        # `normal` points from ellipsoid A towards B; the
+                        # contact stores the repulsion direction for bodyA.
+                        force_normal = -normal
+                        pen_eff = pen
+                        if same_model:
+                            ikey = contact_key(b1, e1.name, b2, e2.name)
+                            pen0 = self._initial_pen_offsets.get(ikey, 0.0)
+                            pen_eff = max(0.0, pen - pen0)
+                        contacts.append(SimpleContact(
+                            b1, b2, s1, s2, force_normal, pen_eff,
+                            friction=self.friction_coef,
+                            ellipsoidA=e1, ellipsoidB=e2,
+                            damping=self.contact_damping,
+                            energy_retention=self.contact_energy_retention,
+                            state_cache=self._contact_states))
 
         # ── Ground contacts (z = 0 plane) ─────────────────────────────
         for _bi, body in enumerate(self.bodies):
@@ -1146,42 +1068,29 @@ class PhysicsEngine:
                     (Rm[2, 2] * r[2]) ** 2))
                 pen = -(pos[2] - z_ext)
                 if pen > -self.contact_penetration_slop:
-                    # Lowest point of the ellipsoid: its support point along
-                    # -z, i.e. pos - R diag(r^2) R^T e_z / z_ext.  The previous
-                    # point (pos.x, pos.y, pos.z - z_ext) is correct only when a
-                    # principal axis is vertical; for a tilted elongated
-                    # ellipsoid (foot, thigh, torso of a falling body) it put
-                    # the ground reaction under the centre instead of under the
-                    # heel/toe, removing the restoring moment it should exert.
+                    # Deepest point of the ellipsoid (its support point along
+                    # -z) and its projection onto the ground plane.  The
+                    # ground is rigid, so the force acts at the plane point.
                     col = (Rm * (r * r)) @ Rm[2, :]
-                    cp = pos - col / max(z_ext, 1e-12)
+                    p_ell = pos - col / max(z_ext, 1e-12)
+                    p_gnd = np.array([p_ell[0], p_ell[1], 0.0])
 
-                    gkey = (body.name, ell.name)
-                    pen0 = (self._initial_ground_offsets.get(gkey, 0.0)
-                            if hasattr(self, '_initial_ground_offsets') else 0.0)
+                    pen0 = self._initial_ground_offsets.get((body.name, ell.name), 0.0)
                     pen_eff = max(0.0, pen - pen0)
                     contacts.append(SimpleContact(
-                        body, None, cp, np.array([0., 0., 1.]),
+                        body, None, p_ell, p_gnd, np.array([0., 0., 1.]),
                         pen_eff,
-                        friction=self.friction_coef, restitution=0.1,
+                        friction=self.friction_coef,
                         ellipsoidA=ell, ellipsoidB=None,
                         damping=self.contact_damping,
-                        energy_retention=self.contact_energy_retention))
+                        energy_retention=self.contact_energy_retention,
+                        state_cache=self._contact_states))
         self.contacts = contacts
-        prune_contact_cache({c._cache_key for c in contacts})
         self._build_contact_index()
         return contacts
 
     def _build_contact_index(self):
-        """
-        Map id(body) -> list of contacts touching that body.
-
-        get_contacts_for_body() is called twice per body per RNEA backward pass
-        (once from get_applied_force, once from get_applied_moment) plus again
-        in _accumulate_contact_forces_on_bodies.  Scanning self.contacts every
-        time is O(n_bodies * n_contacts) per step; with 42 bodies that scan
-        dominated the step cost.
-        """
+        """Map id(body) -> list of contacts touching that body."""
         idx = {}
         for c in self.contacts:
             idx.setdefault(id(c.bodyA), []).append(c)
@@ -1196,176 +1105,99 @@ class PhysicsEngine:
         return idx.get(id(body), [])
 
     # ------------------------------------------------------------------
-    # Contact evaluation scaling  (Fix 4: Newton's 3rd law symmetric)
+    # Contact evaluation (simultaneous interactions of one ellipsoid)
     # ------------------------------------------------------------------
 
     def _compute_all_contact_scales(self):
         """
-        Compute and store a single symmetric scale factor on every active
-        contact object (``c._global_scale``) so that Newton's 3rd law is
-        exactly preserved for all evaluation modes.
+        Set the evaluation scale ``c._global_scale`` of every active contact.
 
-        **Root cause of the previous bug**
-        -----------------------------------
-        The old ``_contact_evaluation_scales(body)`` computed a scale from
-        *each body's own perspective* independently.  When body A had N>1
-        contacts its scale was Fe_max/ΣFe < 1, but each opponent body B
-        computed its scale as 1.0 (singleton group).  Action ≠ Reaction.
+        When one slave ellipsoid touches several surfaces of another model at
+        the same time, assigning each interaction its full characteristic
+        multiplies the effective stiffness by the number of contacts.  The
+        interactions of each slave ellipsoid with one other model form a
+        group:
 
-        **Fix**
-        --------
-        Scales are computed once per step at the *contact* level, not the
-        body level.  For each body that acts as a shared receiving surface
-        (i.e. is touched by N>1 opponents simultaneously) the scale
-        Fe_max/ΣFe is computed and then written to every contact in that
-        group.  If the same contact appears in two receiver groups (both
-        endpoints are shared surfaces) the *minimum* (most restrictive)
-        scale is kept.  Because ``c._global_scale`` is read by both
-        ``get_applied_force(bodyA)`` and ``get_applied_force(bodyB)`` for
-        the same contact, both bodies see the identical scale and
-        Newton's 3rd law is satisfied exactly.
+          'continuous' : every contact in the group is scaled by
+                         max(F_e) / sum(F_e), limited to (0, 1];
+          'discrete'   : only the contact with the largest elastic force
+                         in the group is applied;
+          'none'       : every contact is applied in full.
 
-        Ground contacts (bodyB=None) are always singleton groups: the
-        infinite ground plane cannot be a shared surface in the same sense.
-
-        Must be called once per step after ``detect_contacts()`` and before
-        any force evaluation.
+        The slave is ellipsoid A of the contact, i.e. the body that comes
+        first in load order (detect_contacts always visits body i < j).
+        Ground contacts are singletons.  Each contact belongs to exactly one
+        group, and both bodies read the same scale, so action equals
+        reaction.  The scale applies to the whole contact force (elastic,
+        damping and friction).
         """
-        # Initialise all contacts to scale 1.0 and clear the per-step
-        # magnitude cache (Bug 6 fix: _contact_magnitude must be evaluated
-        # once per contact per step — see _contact_magnitude docstring).
         for c in self.contacts:
             c._global_scale = 1.0
-            c._magnitude_cache = None   # cleared here, populated on first call
+            c._magnitude_cache = None
 
         mode = self.contact_evaluation_mode
         if mode == 'none' or not self.contacts:
             return
 
-        from physics_constraints import _hysteresis_force, _get_combined_curve
-
-        def _fe(c):
-            """Elastic force for a contact (no damping — scale defined on Fe)."""
-            ca = (c.ellipsoidA.force_curve
-                  if c.ellipsoidA is not None and c.ellipsoidA.force_curve is not None
-                  else None)
-            cb = (c.ellipsoidB.force_curve
-                  if c.ellipsoidB is not None and c.ellipsoidB.force_curve is not None
-                  else None)
-            ua = getattr(c.ellipsoidA, 'unload_curve', None)
-            ub = getattr(c.ellipsoidB, 'unload_curve', None) if c.ellipsoidB is not None else None
-            if ca is not None and cb is not None:
-                curve = _get_combined_curve(ca, cb)
-                unload_curve = (_get_combined_curve(ua, ub)
-                                if ua is not None and ub is not None
-                                else (ua if ua is not None else ub))
-            elif ca is not None:
-                curve = ca
-                unload_curve = ua
-            elif cb is not None:
-                curve = cb
-                unload_curve = ub
-            else:
-                curve = np.array([[0.0, 0.0], [0.1, 5000.0]])
-                unload_curve = None
-            return max(0.0, _hysteresis_force(curve, c.penetration,
-                                              c._state['pen_max'], c.eta,
-                                              unload_curve=unload_curve))
-
-        # ── Group by BODY PAIR, not by body ──────────────────────────
-        # The class docstring defines the grouping unit explicitly: "contacts
-        # between the same (bodyA, bodyB) pair are evaluated together;
-        # contacts between different body pairs are always independent".
-        # The implementation grouped by single body instead, which lumped
-        # every opponent of a body into one group.  Two consequences:
-        #
-        #   1. Independent body pairs were coupled.  A head resting against a
-        #      pelvis had its force reduced because the same head also touched
-        #      a thigh -- two genuinely separate contact surfaces, which the
-        #      documented design says must not interact.
-        #   2. A contact could belong to two groups, so the min() needed to
-        #      keep Newton's 3rd law symmetric could zero EVERY contact of a
-        #      pair (the pair's own winner losing in the other group).  In
-        #      'discrete' mode that annihilated 67 % of active body pairs on
-        #      testimpact1.json -- those bodies transmitted no force at all
-        #      and passed through each other.
-        #
-        # Grouping by pair fixes both, and is strictly simpler: each contact
-        # now belongs to exactly one group, so no min() reconciliation is
-        # needed and both endpoints trivially read the same scale.
-        pair_groups = {}
+        groups = {}
         for c in self.contacts:
             if c.bodyB is None:
-                continue          # ground: always its own singleton group
-            key = (min(id(c.bodyA), id(c.bodyB)), max(id(c.bodyA), id(c.bodyB)))
-            pair_groups.setdefault(key, []).append(c)
+                continue
+            name_a = c.ellipsoidA.name if c.ellipsoidA is not None else ''
+            key = (id(c.bodyA), name_a, getattr(c.bodyB, 'model_idx', id(c.bodyB)))
+            groups.setdefault(key, []).append(c)
 
-        for grp in pair_groups.values():
+        for grp in groups.values():
             if len(grp) < 2:
-                continue          # singleton pair: scale stays 1.0
-            fe_vals = [_fe(c) for c in grp]
+                continue
+            fe_vals = [c.F_elastic for c in grp]
             fe_max  = max(fe_vals)
             fe_sum  = sum(fe_vals)
             if fe_max <= 0.0:
-                continue          # no force to transmit yet
-
+                continue
             if mode == 'discrete':
-                # Exactly one contact per pair survives: the strongest.
-                # argmax breaks ties deterministically, so a pair can never
-                # be left with nothing.
                 k = int(np.argmax(fe_vals))
                 for idx, c in enumerate(grp):
                     c._global_scale = 1.0 if idx == k else 0.0
             else:  # 'continuous'
-                if fe_sum > 1e-12:
-                    s = min(1.0, fe_max / fe_sum)
-                    for c in grp:
-                        c._global_scale = s
+                s = min(1.0, fe_max / fe_sum)
+                for c in grp:
+                    c._global_scale = s
 
     # ------------------------------------------------------------------
-    # Applied forces & moments (BF-B + BF-C + BF-6 + BF-7)
+    # Applied forces & moments
     # ------------------------------------------------------------------
 
-    def _dynamic_amplification(self, v_norm_abs):
+    def _dynamic_amplification(self, rate_abs):
         """
-        Dynamic Amplification Factor (Appendix C, Form 3):
-            γ = C1 + C2 · (|ε̇| / C3)^C4
-
-        Scales the elastic contact force by the approach velocity to model
-        rate-dependent soft-tissue stiffening.  
-
+        Dynamic amplification factor of the elastic contact force:
+            γ = C1 + C2 · (|λ̇| / C3)^C4
 
         Parameters
         ----------
-        v_norm_abs : float  – |v_norm|, approach speed in m/s (≥ 0)
+        rate_abs : float  – |λ̇|, magnitude of the penetration rate (m/s)
         """
         C1, C2, C3, C4 = (self.dyn_amp_C1, self.dyn_amp_C2,
                            self.dyn_amp_C3, self.dyn_amp_C4)
-        return C1 + C2 * (v_norm_abs / (C3 + 1e-12)) ** C4
+        if C2 == 0.0:
+            return C1
+        return C1 + C2 * (rate_abs / (C3 + 1e-12)) ** C4
 
     def _contact_magnitude(self, c):
         """
-        Total normal contact force for contact `c`:
-          F_total = γ(|v_norm_prev|) · F_elastic(λ, hysteresis) ± F_damping
-        where γ is the dynamic amplification factor (Appendix C Form 3).
+        Normal contact force magnitude for contact `c`:
 
-        Returns (magnitude, v_rel, v_rel_n).
+            F_n = max(0, γ(|λ̇|) · F_e + C_d · λ̇)
 
-        Per-step caching (Bug 6 fix)
-        ----------------------------
-        This method is called up to 6 times per contact per step (twice each
-        for bodyA and bodyB inside rnea, and twice more in
-        _accumulate_contact_forces_on_bodies).  Without caching the DAF state
-        ``v_rel_n_prev`` is overwritten on the first call, so calls 2–6 would
-        evaluate γ at the *current* velocity rather than the lagged one —
-        causing inconsistency between the equations of motion and the recorded
-        forces when C2 > 0.
+        F_e is the static elastic force (with hysteresis) evaluated once per
+        step when the contact was created, λ̇ = -(v_A - v_B)·n the penetration
+        rate at the point of application, γ the dynamic amplification factor
+        and C_d the damping coefficient.  Damping adds to the elastic force
+        while loading and subtracts from it while unloading; the contact can
+        push but never pull, and carries no force at zero penetration.
 
-        The cache ``c._magnitude_cache`` is set to None by
-        ``_compute_all_contact_scales()`` at the start of every step (after
-        detect_contacts but before force evaluation).  The first call within
-        each step computes the result and caches it; all subsequent calls
-        return the cached tuple directly.
+        Returns (magnitude, v_rel, v_rel_n).  Cached for the step; the cache
+        is cleared by _compute_all_contact_scales().
         """
         if c._magnitude_cache is not None:
             return c._magnitude_cache
@@ -1373,68 +1205,19 @@ class PhysicsEngine:
         vB = (c.bodyB.get_velocity_at_point(c.point)
               if c.bodyB is not None else np.zeros(3))
         v_rel   = vA - vB
-        v_rel_n = np.dot(v_rel, c.normal)
+        v_rel_n = float(np.dot(v_rel, c.normal))
 
-        v_rel_n_prev = c._state.get('v_rel_n_prev', v_rel_n)
-        c._state['v_rel_n_prev'] = v_rel_n   # update for next step
+        if c.penetration <= 0.0:
+            result = (0.0, v_rel, v_rel_n)
+            c._magnitude_cache = result
+            return result
 
-        # Dynamic amplification scales the elastic force only (not damping)
-        gamma = self._dynamic_amplification(abs(v_rel_n_prev))
-
-        # Amplified elastic + hysteresis force
-        pen_max  = c._state['pen_max']
-        from physics_constraints import _hysteresis_force, _get_combined_curve
-        ca = (c.ellipsoidA.force_curve
-              if c.ellipsoidA is not None and c.ellipsoidA.force_curve is not None
-              else None)
-        cb = (c.ellipsoidB.force_curve
-              if c.ellipsoidB is not None and c.ellipsoidB.force_curve is not None
-              else None)
-        ua = getattr(c.ellipsoidA, 'unload_curve', None)
-        ub = getattr(c.ellipsoidB, 'unload_curve', None) if c.ellipsoidB is not None else None
-        if ca is not None and cb is not None:
-            curve = _get_combined_curve(ca, cb)
-            unload_curve = (_get_combined_curve(ua, ub)
-                            if ua is not None and ub is not None
-                            else (ua if ua is not None else ub))
-        elif ca is not None:
-            curve = ca
-            unload_curve = ua
-        elif cb is not None:
-            curve = cb
-            unload_curve = ub
-        else:
-            curve = np.array([[0.0, 0.0], [0.1, 5000.0]])
-            unload_curve = None
-
-        F_elastic = gamma * _hysteresis_force(
-            curve, c.penetration, pen_max, c.eta,
-            unload_curve=unload_curve)
-
-        # ── Damping (not amplified) ───────────────────────────────────
-        # Kelvin-Voigt with a unilateral (non-adhesive) clamp:
-        #     F = max(0, F_elastic + c_d * lambda_dot)
-        # c.normal points from the contact surface INTO bodyA, so
-        # v_rel_n = (v_A - v_B).n is NEGATIVE while the bodies approach, and
-        # the penetration rate is lambda_dot = -v_rel_n.
-        #
-        # The previous form used abs(v_rel_n) and took the sign from the
-        # penetration-history flag c._state['loading'].  Those two disagree
-        # whenever the flag lags the actual normal velocity -- at every
-        # loading/unloading reversal, and any step where penetration deepens
-        # while v_rel_n is momentarily positive (or vice versa) -- and the
-        # damping force then pushed the wrong way.  Taking the sign straight
-        # from lambda_dot removes the ambiguity; the history flag keeps its
-        # proper job, which is selecting the elastic hysteresis branch.
         pen_rate  = -v_rel_n
-        F_damping = c.damping * pen_rate
+        gamma     = self._dynamic_amplification(abs(pen_rate))
+        F_total   = gamma * c.F_elastic + c.damping * pen_rate
 
-        # max(0, ...) enforces the unilateral condition: a contact may push
-        # but never pull, so a fast-separating contact simply releases.
-        F_total = F_elastic + F_damping
-
-        result = max(0.0, F_total), v_rel, v_rel_n
-        c._magnitude_cache = result   # reused by all subsequent calls this step
+        result = (max(0.0, F_total), v_rel, v_rel_n)
+        c._magnitude_cache = result
         return result
 
     def get_applied_force(self, body, t):
@@ -1501,74 +1284,46 @@ class PhysicsEngine:
 
     def update_kinematics_from_q(self, q):
         """
-        Propagate generalised coordinates q to all body poses (pos, R, quat).
-        Angles in q are RADIANS; the visual model expects DEGREES.
-        Root translation is read from q (not from static pos_str).
+        Propagate generalised coordinates q to all body poses (pos, R, quat),
+        and push the same pose to the visual MultibodyHumanModel.
+
+        The visual model receives the exact internal joint rotation matrices
+        (and the root orientation matrix) rather than Euler angles, so the
+        preview cannot drift from the dynamics through an angle round trip
+        or an input-convention mismatch.
         """
         root_pos   = [None] * len(self.models)
-        root_ang   = [np.zeros(3)] * len(self.models)
-        jstates    = [{} for _ in range(len(self.models))]
+        root_R     = [None] * len(self.models)
+        jrots      = [{} for _ in range(len(self.models))]
         idx = 0
 
         for (midx, jname, jinfo, dof) in self.joint_list:
             if jinfo.get('is_root_joint', False):
                 if dof == 7:
                     root_pos[midx] = q[idx:idx+3]
-                    root_ang[midx] = q[idx+3:idx+7]   # quaternion [qw,qx,qy,qz]
+                    qr = q[idx+3:idx+7]
+                    nr = np.linalg.norm(qr)
+                    qr = qr / nr if nr > 1e-12 else np.array([1., 0., 0., 0.])
+                    root_R[midx] = quat_to_matrix(qr)
                 elif dof == 3:
-                    root_ang[midx] = q[idx:idx+3]
+                    root_R[midx] = self._zyx_matrix(*q[idx:idx+3])
                 idx += dof
             else:
                 jt = jinfo.get('type', 'fixed')
                 if jt == 'spherical' and dof == 4:
-                    # Quaternion spherical joint — convert to degrees for visual model
                     qjt = q[idx:idx+4]
                     norm = np.linalg.norm(qjt)
                     qjt = qjt / norm if norm > 1e-12 else np.array([1.,0.,0.,0.])
-                    R = quat_to_matrix(qjt)
-                    sb = float(np.clip(-R[2, 0], -1.0, 1.0))
-                    b  = np.arcsin(sb)
-                    cb = np.cos(b)
-                    if abs(cb) > 1e-6:
-                        a = np.arctan2(R[1, 0] / cb, R[0, 0] / cb)
-                        g = np.arctan2(R[2, 1] / cb, R[2, 2] / cb)
-                    else:
-                        a = np.arctan2(-R[0, 1], R[1, 1])
-                        g = 0.0
-                    jstates[midx][jname] = np.array([a, b, g])   # radians, visual model converts
+                    jrots[midx][jname] = quat_to_matrix(qjt)
                     idx += 4
                 elif jt == 'spherical' and dof == 3:
-                    jstates[midx][jname] = q[idx:idx+3]
+                    jrots[midx][jname] = self._zyx_matrix(*q[idx:idx+3])
                     idx += 3
                 elif jt == 'revolute' and dof == 1:
-                    # Map the single revolute DOF to the correct ZYX Euler slot
-                    # (Z=slot 0, Y=slot 1, X=slot 2) so that the visual model's
-                    # get_joint_rotation_matrix rotates about the right axis.
-                    euler_angles = np.zeros(3)
-                    # Look up the pre-computed child-frame axis for this joint
-                    axis_slot = 0  # default: Z-rotation
-                    for k_body, body_k in enumerate(self.bodies):
-                        if body_k.model_idx != midx:
-                            continue
-                        vis_k = body_k.name.split('_', 1)[1]
-                        vis_obj_k = self.models[midx].bodies.get(vis_k)
-                        if (vis_obj_k is not None and
-                                vis_obj_k.joint_name_to_parent == jname):
-                            # Always ZYX slot 0. The visual model composes
-                            # parent @ T1 @ R(euler) @ T2_inv, the same product
-                            # the dynamics poses use, where the joint rotation
-                            # is Rz(theta) in the joint frame by construction --
-                            # T1 already carries the physical axis direction, so
-                            # R(euler) must be a pure Z rotation whatever that
-                            # direction is. Selecting the slot from the axis
-                            # vector rotated the rendered body about the joint
-                            # frame's X or Y axis instead, so the setup-tab
-                            # preview showed a deflected revolute joint bent in
-                            # the wrong plane relative to what was simulated.
-                            axis_slot = 0
-                            break
-                    euler_angles[axis_slot] = q[idx]
-                    jstates[midx][jname] = euler_angles
+                    # The joint rotation is Rz(theta) in the joint frame by
+                    # construction (T1's Z column is the hinge axis).
+                    jrots[midx][jname] = self._rodrigues_rotation(
+                        np.array([0.0, 0.0, 1.0]), q[idx])
                     idx += 1
                 else:
                     idx += dof
@@ -1577,30 +1332,14 @@ class PhysicsEngine:
             cfg  = self.model_configs[midx]
             rpos = (root_pos[midx] if root_pos[midx] is not None
                     else np.array([float(x) for x in cfg.pos_str.split()]))
-            ra = root_ang[midx]
-            if len(ra) == 4:
-                # Quaternion root: convert to ZYX Euler degrees for visual model
-                R = quat_to_matrix(ra)
-                # Extract ZYX Euler - clamp cb to [-1,1] to avoid NaN in arcsin
-                sb = float(np.clip(-R[2, 0], -1.0, 1.0))
-                b  = np.arcsin(sb)
-                cb = np.cos(b)
-                if abs(cb) > 1e-6:
-                    a = np.arctan2(R[1, 0] / cb, R[0, 0] / cb)
-                    g = np.arctan2(R[2, 1] / cb, R[2, 2] / cb)
-                else:
-                    a = np.arctan2(-R[0, 1], R[1, 1])
-                    g = 0.0
-                rang_deg = np.degrees([a, b, g])
-            else:
-                rang_deg = np.degrees(ra)
-            jstates_deg = {k: np.degrees(v) for k, v in jstates[midx].items()}
-            model.update_kinematics(jstates_deg, rpos, rang_deg)
+            model.update_kinematics({}, rpos, [0.0, 0.0, 0.0],
+                                    joint_rotations=jrots[midx],
+                                    root_R=root_R[midx])
 
         # Compute body.pos/R/quat directly from the quaternion (and, for
         # revolute joints, an exact single-axis rotation) state -- see
         # _compute_body_poses_from_state for why this must not go through
-        # the Euler-angle round trip used above to drive the visual model.
+        # an Euler-angle round trip.
         self._compute_body_poses_from_state(q)
 
     @staticmethod
@@ -1627,8 +1366,7 @@ class PhysicsEngine:
         without ever routing a quaternion or revolute DOF through Euler
         angles.
 
-        Why this exists (separate from the block above that drives the
-        visual MultibodyHumanModel for the setup-tab preview):
+        Why this exists (separate from the visual-model update above):
         `update_kinematics_from_q` used to finish by extracting ZYX Euler
         angles from every joint's quaternion, feeding those degrees into
         the visual model's Rz@Ry@Rx forward-kinematics chain, and copying
@@ -1692,15 +1430,7 @@ class PhysicsEngine:
                     # there's no quaternion to fall back on, so it retains
                     # the original gimbal-lock-prone behaviour, same as
                     # before, for this otherwise-unused code path only.
-                    a, b, g = q[s:s + 3]
-                    ca, sa = np.cos(a), np.sin(a)
-                    cb, sb = np.cos(b), np.sin(b)
-                    cg, sg = np.cos(g), np.sin(g)
-                    R = np.array([
-                        [ca*cb, ca*sb*sg - sa*cg, ca*sb*cg + sa*sg],
-                        [sa*cb, sa*sb*sg + ca*cg, sa*sb*cg - ca*sg],
-                        [-sb,   cb*sg,             cb*cg           ]
-                    ])
+                    R = self._zyx_matrix(*q[s:s + 3])
                     cfg = self.model_configs[midx]
                     pos_origin = np.array([float(x) for x in cfg.pos_str.split()])
                 elif dof == 0:
@@ -1752,15 +1482,7 @@ class PhysicsEngine:
                     # Legacy Euler spherical joint (dead code path in the
                     # current bundled models -- add_model always assigns
                     # dof=4/quaternion to 'spherical' joints).
-                    a, b, g = q[s:s + 3]
-                    ca, sa = np.cos(a), np.sin(a)
-                    cb, sb = np.cos(b), np.sin(b)
-                    cg, sg = np.cos(g), np.sin(g)
-                    R_joint = np.array([
-                        [ca*cb, ca*sb*sg - sa*cg, ca*sb*cg + sa*sg],
-                        [sa*cb, sa*sb*sg + ca*cg, sa*sb*cg - ca*sg],
-                        [-sb,   cb*sg,             cb*cg           ]
-                    ])
+                    R_joint = self._zyx_matrix(*q[s:s + 3])
                 elif jtype == 'revolute' and dof == 1 and s != -1:
                     # R_joint sits BETWEEN T1 and T2_inv, so it acts in the
                     # JOINT frame -- where the rotation axis is (0,0,1) by
@@ -1773,7 +1495,7 @@ class PhysicsEngine:
                     # an axis of [0,1,0] requested in openmbd_model_editor.html
                     # produced rotation about world -X.
                     #
-                    # (Equivalently one may keep Rodrigues(T1[:3,2], q) and
+                    # (Equivalently one may keep Rodrigues(T1[:,2], q) and
                     # move it BEFORE T1, since T1 @ Rz(q) == Rodrigues(T1[:,2], q) @ T1.)
                     R_joint = self._rodrigues_rotation(
                         np.array([0.0, 0.0, 1.0]), q[s])
@@ -1950,7 +1672,7 @@ class PhysicsEngine:
             if jtype == 'revolute' and dof == 1:
                 ax = body.R @ self.joint_axis_local[i]
                 omega[i] = omega[pi] + ax * qd_j[0]
-               
+
                 v[i]     = v_par_jnt + np.cross(omega[i], -cj_world)
                 a_pj     = (a[pi]
                             + np.cross(alpha[pi], r_pj)
@@ -1984,7 +1706,7 @@ class PhysicsEngine:
                 E   = self._E_body_zyx(ang)
                 omega_rel = body.R @ (E @ qd_j)
                 omega[i]  = omega[pi] + omega_rel
-                
+
                 v[i]      = v_par_jnt + np.cross(omega[i], -cj_world)
 
                 bias_local = self._bias_local_zyx(ang, qd_j)
@@ -2025,7 +1747,7 @@ class PhysicsEngine:
             Iw       = body.get_world_inertia()
             tau_star = Iw @ alpha[i] + np.cross(omega[i], Iw @ omega[i])
 
-            # get_applied_force includes gravity + normal + friction 
+            # get_applied_force includes gravity + normal + friction
             f[i]   = self.get_applied_force(body, self.time)  - f_star
             tau[i] = self.get_applied_moment(body, self.time) - tau_star
 
@@ -2104,7 +1826,7 @@ class PhysicsEngine:
     # Prescribed joint torques
     # ------------------------------------------------------------------
 
-    def _compute_prescribed_torques(self, t):
+    def _compute_prescribed_torques(self, t, q=None):
         """
         Return a generalised-force vector contribution from all active
         prescribed torque entries at simulation time t.
@@ -2112,15 +1834,22 @@ class PhysicsEngine:
         Each entry in self.prescribed_torques is a dict:
             model_idx  : int        – which loaded model this applies to
             joint_name : str        – must match a key in joint_dof_map
-            torque     : ndarray    – (dof,) N·m, ZYX axis order
+            torque     : ndarray    – [τZ, τY, τX] N·m about the PARENT axes
+                                      (global axes for a free root),
+                                      right-hand convention
             t_start    : float      – simulation time to begin applying (s)
             duration   : float      – how long to apply (s); 0 = one step
 
-        The torque is added directly to the matching slice of the
-        generalised force vector B.  For spherical joints the torque
-        vector is projected through E^T (same as joint-limit torques),
-        so the units remain N·m in generalised coordinates.
+        The torque acts on the child and, equal and opposite, on the parent.
+        It is mapped onto the generalised-force slots that are conjugate to
+        each joint's velocity DOFs:
+          * spherical: qdot is omega in CHILD axes, so  Q = R_pc^T @ tau
+            (R_pc = current child orientation relative to the parent);
+          * revolute : Q = tau . hinge axis (parent axes);
+          * free root: Q = tau (qdot is omega in global axes).
         """
+        if q is None:
+            q = self.state[:self.nq]
         tau = np.zeros(self.nq)
         for entry in self.prescribed_torques:
             t_start  = entry['t_start']
@@ -2148,6 +1877,7 @@ class PhysicsEngine:
             if key not in self.joint_dof_map:
                 continue
             s, dof = self.joint_dof_map[key]
+            jinfo = self._jinfo_by_key.get(key)
 
             trq = np.asarray(entry['torque'], dtype=float)
             # Half-sine envelope: the specified magnitude is the PEAK.
@@ -2161,52 +1891,19 @@ class PhysicsEngine:
             scale = np.sin(np.pi * phase)
 
             if dof == 1:
-                # Revolute joint: the user supplies a ZYX torque vector
-                # [τZ, τY, τX].  The generalised force is the scalar projection
-                # of that torque onto the joint axis.  The axis stored in
-                # joint_axis_local[k] is in child-body local frame; we need
-                # it in world frame to dot with the world-frame torque vector.
-                # Find the matching body index to look up the axis.
-                tau_scalar = float(trq[0])   # fallback: Z-component only
-                midx = entry['model_idx']
-                jname = entry['joint_name']
-                for k_b, body_k in enumerate(self.bodies):
-                    if body_k.model_idx != midx:
-                        continue
-                    vis_k = body_k.name.split('_', 1)[1]
-                    vis_obj_k = self.models[midx].bodies.get(vis_k)
-                    if (vis_obj_k is not None and
-                            vis_obj_k.joint_name_to_parent == jname):
-                        ax_local = self.joint_axis_local[k_b]
-                        if ax_local is not None:
-                            ax_world = body_k.R @ ax_local
-                            # Build a ZYX Euler basis from the torque slots
-                            # so the dot product is axis-aligned correctly:
-                            #   trq = [τZ, τY, τX]  →  τ_world = [0,0,τZ] + [0,τY,0] + [τX,0,0]
-                            #   but we just project: τ_gen = ax_world · trq_world
-                            # trq_world assumes the torque is already in world axes:
-                            # trq[0] acts about world Z, trq[1] about world Y, trq[2] about X
-                            trq_world = np.array([
-                                float(trq[2]) if len(trq) > 2 else 0.0,  # X
-                                float(trq[1]) if len(trq) > 1 else 0.0,  # Y
-                                float(trq[0]) if len(trq) > 0 else 0.0,  # Z
-                            ])
-                            tau_scalar = float(np.dot(ax_world, trq_world))
-                        break
-                tau[s] += tau_scalar * scale
+                # Revolute joint: right-handed torque about the hinge axis.
+                # The axis in parent axes is T1[:3,2] and is fixed in the
+                # parent, so the projection is time-invariant.
+                tau[s] += revolute_scalar_from_input(jinfo, trq) * scale
             elif dof == 4:
-                # Quaternion spherical joint: qdot[s:s+3] are the 3 real
-                # angular-velocity DOFs (omega_local, child LOCAL x,y,z
-                # axes); slot s+3 is the quaternion-norm constraint and
-                # carries no generalised force. `trq` is supplied in the
-                # same [tauZ,tauY,tauX] label order as joint_vels/angles
-                # (see the revolute-joint case above, and the reorder
-                # applied to joint_vels in _initialize_state_from_config),
-                # so reorder to (X,Y,Z) before it lands on the
-                # (omega_x,omega_y,omega_z) generalised-force slots.
-                trq_zyx = trq[:3] if len(trq) >= 3 else np.pad(trq, (0, 3 - len(trq)))
-                trq_xyz = trq_zyx[::-1]
-                tau[s:s + 3] += trq_xyz * scale
+                # Spherical joint: torque given about the PARENT axes; the
+                # conjugate generalised force for qdot (= omega in child
+                # axes) is the same torque resolved in the child axes.
+                qj = q[s:s + 4]
+                nj = np.linalg.norm(qj)
+                qj = qj / nj if nj > 1e-12 else np.array([1., 0., 0., 0.])
+                R_j = quat_to_matrix(qj)
+                tau[s:s + 3] += parent_vector_to_child(jinfo, R_j, trq) * scale
             elif dof == 7:
                 # Root free joint: qdot[s:s+3] is LINEAR velocity (conjugate
                 # generalised force = a literal FORCE); qdot[s+3:s+6] is the
@@ -2214,18 +1911,10 @@ class PhysicsEngine:
                 # generalised force = a TORQUE); qdot[s+6] is the
                 # quaternion-norm constraint slot (unused). A prescribed
                 # "torque" must land entirely on the angular slots
-                # (s+3:s+6) -- previously it fell into the generic branch
-                # below and was written starting at tau[s], i.e. applied as
-                # a translational FORCE instead of a rotational TORQUE (this
-                # was verified experimentally: a 300 N*m pulse produced a
-                # large linear root velocity of order 1 m/s instead of
-                # driving the intended spin). It also needs the same
-                # [tauZ,tauY,tauX] -> (X,Y,Z) reorder used for the spherical
-                # case just above and for the root's initial joint_vels in
-                # _initialize_state_from_config.
-                trq_zyx = trq[:3] if len(trq) >= 3 else np.pad(trq, (0, 3 - len(trq)))
-                trq_xyz = trq_zyx[::-1]
-                tau[s + 3:s + 6] += trq_xyz * scale
+                # (s+3:s+6).  The parent of a free root is the reference
+                # space, so the input is already in global axes; only the
+                # [τZ, τY, τX] -> (X, Y, Z) reorder is needed.
+                tau[s + 3:s + 6] += zyx_slots_to_xyz(trq) * scale
             else:
                 n = min(dof, len(trq))
                 tau[s:s + n] += trq[:n] * scale
@@ -2256,21 +1945,20 @@ class PhysicsEngine:
         # A_ii ~ 8.4e-4 kg m^2), which visibly distorts the distal segments.
         A += 1e-6 * np.eye(nq)
 
-        # ── Passive joint damping, applied IMPLICITLY ─────────────────
-        # Explicit damping (B += -D q̇, then q̇ += dt A⁻¹B) is only stable for
-        # D < 2 A_ii / dt.  At dt = 1e-4 the wrist roll DOFs give
-        # D_max = 16.9 N·m·s/rad, well under JOINT_PASSIVE_D = 40, so the
-        # dashpot itself diverged and spun the whole model up in free fall.
-        # Substituting q̇_new = q̇ + dt·q̈ into A q̈ = B_other - D q̇_new gives
-        #     (A + dt·D) q̈ = B_other - D q̇
-        # which is unconditionally stable for any D and dt.
-        D = self._passive_damping_diag()
-        A[np.diag_indices(nq)] += self.dt * D
+        # ── Joint restraints, applied IMPLICITLY ─────────────────────
+        # With q̇_new = q̇ + dt·q̈ and q_new ≈ q + dt·q̇_new, the restraint
+        # force at the end of the step is
+        #     Q_e(q) − K·dt·q̇_new − D·q̇_new
+        # so  (A + dt·D + dt²·K) q̈ = B_other + Q_e − (D + dt·K) q̇
+        # which keeps stiff springs and heavy dashpots stable at any dt
+        # (explicit forms diverge once D > 2 A_ii/dt or K > 4 A_ii/dt²).
+        Qe, Kr, D = _jr.assemble(self, q, qdot, self.joint_friction_ramp)
+        A += self.dt * D + self.dt * self.dt * Kr
 
         B  = self.rnea(q, qdot)
         B += self.compute_joint_limit_torques(q, qdot)
-        B += -D * qdot
-        B += self._compute_prescribed_torques(self.time)
+        B += Qe - (D + self.dt * Kr) @ qdot
+        B += self._compute_prescribed_torques(self.time, q)
         return A, B
 
     # ------------------------------------------------------------------
