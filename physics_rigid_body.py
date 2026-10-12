@@ -1,6 +1,6 @@
 # physics_rigid_body.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.0 
+# Version: 1.1
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import numpy as np
@@ -57,13 +57,14 @@ class RigidBody:
         self.ellipsoids = []
         if 'ellipsoids' in data:
             for ell_data in data['ellipsoids']:
-                dims = ell_data['dims']
-                local_T = ell_data.get('local_T', np.eye(4))
-                name = ell_data.get('name', '')
-                force_curve = ell_data.get('force_curve', None)
-                unload_curve = ell_data.get('unload_curve', None)
-                self.ellipsoids.append(EllipsoidGeometry(dims, local_T, name,
-                                                         force_curve, unload_curve))
+                self.ellipsoids.append(EllipsoidGeometry(
+                    ell_data['dims'],
+                    ell_data.get('local_T', np.eye(4)),
+                    ell_data.get('name', ''),
+                    ell_data.get('force_curve', None),
+                    ell_data.get('unload_curve', None),
+                    hysteresis_slope=ell_data.get('hysteresis_slope', None),
+                    elastic_limit=ell_data.get('elastic_limit', None)))
 
         self.pos = np.zeros(3)
         self.quat = np.array([1.0, 0.0, 0.0, 0.0])
