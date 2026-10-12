@@ -1,6 +1,6 @@
 # models_config.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.0 
+# Version: 1.1
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 class ModelConfig:
@@ -10,9 +10,11 @@ class ModelConfig:
         self.pos_str = "0.0 0.0 0.95"
         self.vel_str = "0.0 0.0 0.0"
         self.ang_vel_str = "0.0 0.0 0.0"   # root angular velocity (rad/s, ZYX order)
-        self.joints = {}
-        self.joint_vels    = {}            # joint_name -> [ωZ, ωY, ωX] rad/s
+        self.joints = {}                   # joint_name -> [φZ, φY, φX] deg, about parent axes
+        self.joint_vels    = {}            # joint_name -> [ωZ, ωY, ωX] rad/s, about parent axes
         self.joint_torques = {}            # joint_name -> [τZ, τY, τX] N·m, t_start, duration
+        # Joint restraints (stiffness, damping, friction) are properties of
+        # the model and live in the model file, not in the simulation config.
         self.hierarchy = {}
         self.parser = None
         self.multibody_model = None
@@ -27,8 +29,8 @@ class ModelConfig:
             "vel": self.vel_str,
             "ang_vel": self.ang_vel_str,
             "joints": self.joints,
-            "joint_vels":    self.joint_vels,
-            "joint_torques": self.joint_torques,
+            "joint_vels":       self.joint_vels,
+            "joint_torques":    self.joint_torques,
         }
 
     def from_dict(self, d):
@@ -37,5 +39,5 @@ class ModelConfig:
         self.vel_str     = d.get("vel", "0 0 0")
         self.ang_vel_str = d.get("ang_vel", "0 0 0")
         self.joints      = d.get("joints", {})
-        self.joint_vels    = d.get("joint_vels",    {})
-        self.joint_torques = d.get("joint_torques", {})
+        self.joint_vels       = d.get("joint_vels",       {})
+        self.joint_torques    = d.get("joint_torques",    {})
