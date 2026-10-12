@@ -4021,7 +4021,103 @@
           0,
           1
         ]
-      ]
+      ],
+      "elastic_curve": {
+        "Y": [
+          [
+            -25.0,
+            -9.387
+          ],
+          [
+            -20.0,
+            -5.779
+          ],
+          [
+            -15.0,
+            -3.376
+          ],
+          [
+            -10.0,
+            -1.776
+          ],
+          [
+            -5.0,
+            -0.71
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            5.0,
+            1.24
+          ],
+          [
+            10.0,
+            3.381
+          ],
+          [
+            15.0,
+            7.079
+          ],
+          [
+            20.0,
+            13.467
+          ],
+          [
+            25.0,
+            24.5
+          ]
+        ],
+        "X": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            5.0,
+            1.373
+          ],
+          [
+            10.0,
+            3.701
+          ],
+          [
+            15.0,
+            7.652
+          ],
+          [
+            20.0,
+            14.353
+          ]
+        ],
+        "Z": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            5.0,
+            0.536
+          ],
+          [
+            10.0,
+            1.308
+          ],
+          [
+            15.0,
+            2.42
+          ],
+          [
+            20.0,
+            4.023
+          ],
+          [
+            25.0,
+            6.331
+          ]
+        ]
+      }
     },
     {
       "name": "upperbackJnt",
@@ -4105,6 +4201,11 @@
           0,
           1
         ]
+      ],
+      "stiffness": [
+        15.92,
+        16.16,
+        13.12
       ]
     },
     {
@@ -4357,6 +4458,107 @@
           0,
           1
         ]
+      ],
+      "elastic_curve": {
+        "Y": [
+          [
+            -60,
+            -5.192
+          ],
+          [
+            -50,
+            -3.431
+          ],
+          [
+            -40,
+            -2.194
+          ],
+          [
+            -30,
+            -1.326
+          ],
+          [
+            -20,
+            -0.718
+          ],
+          [
+            -10,
+            -0.294
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            10,
+            0.094
+          ],
+          [
+            20,
+            0.246
+          ],
+          [
+            30,
+            0.487
+          ],
+          [
+            40,
+            0.865
+          ],
+          [
+            50,
+            1.453
+          ],
+          [
+            60,
+            2.369
+          ],
+          [
+            70,
+            3.793
+          ]
+        ],
+        "X": [
+          [
+            0,
+            0
+          ],
+          [
+            14.4,
+            0.85
+          ],
+          [
+            21.5,
+            1.57
+          ],
+          [
+            28.7,
+            2.93
+          ]
+        ],
+        "Z": [
+          [
+            0,
+            0
+          ],
+          [
+            21.5,
+            1.6
+          ],
+          [
+            32.2,
+            2.59
+          ],
+          [
+            42.9,
+            4.13
+          ]
+        ]
+      },
+      "damping": [
+        0.2,
+        0.2,
+        0.2
       ]
     },
     {
@@ -4441,6 +4643,103 @@
           0,
           1
         ]
+      ],
+      "elastic_curve": {
+        "Y": [
+          [
+            -30,
+            -6.74
+          ],
+          [
+            -25,
+            -1.976
+          ],
+          [
+            -20,
+            -0.577
+          ],
+          [
+            -15,
+            -0.166
+          ],
+          [
+            -10,
+            -0.046
+          ],
+          [
+            -5,
+            -0.01
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            5,
+            0.144
+          ],
+          [
+            10,
+            0.365
+          ],
+          [
+            15,
+            0.706
+          ],
+          [
+            20,
+            1.232
+          ],
+          [
+            25,
+            2.042
+          ],
+          [
+            30,
+            3.29
+          ]
+        ],
+        "X": [
+          [
+            0,
+            0
+          ],
+          [
+            6.2,
+            0.85
+          ],
+          [
+            9.2,
+            1.57
+          ],
+          [
+            12.3,
+            2.93
+          ]
+        ],
+        "Z": [
+          [
+            0,
+            0
+          ],
+          [
+            17.6,
+            1.6
+          ],
+          [
+            26.3,
+            2.59
+          ],
+          [
+            35.1,
+            4.13
+          ]
+        ]
+      },
+      "damping": [
+        0.6,
+        0.6,
+        0.6
       ]
     },
     {
@@ -4861,6 +5160,16 @@
           0,
           1
         ]
+      ],
+      "stiffness": [
+        0.0,
+        0.88,
+        0.0
+      ],
+      "neutral_angle": [
+        0.0,
+        -73.0,
+        0.0
       ]
     },
     {
@@ -4945,6 +5254,16 @@
           0,
           1
         ]
+      ],
+      "stiffness": [
+        0.0,
+        0.88,
+        0.0
+      ],
+      "neutral_angle": [
+        0.0,
+        -73.0,
+        0.0
       ]
     },
     {
@@ -5029,6 +5348,16 @@
           0,
           1
         ]
+      ],
+      "stiffness": [
+        0.0,
+        0.96,
+        1.49
+      ],
+      "damping": [
+        0.04,
+        0.04,
+        0.04
       ]
     },
     {
@@ -5113,6 +5442,16 @@
           0,
           1
         ]
+      ],
+      "stiffness": [
+        0.0,
+        0.96,
+        1.49
+      ],
+      "damping": [
+        0.04,
+        0.04,
+        0.04
       ]
     },
     {
@@ -5197,6 +5536,79 @@
           0,
           1
         ]
+      ],
+      "elastic_curve": {
+        "Y": [
+          [
+            -120.0,
+            -119.173
+          ],
+          [
+            -110.0,
+            -87.952
+          ],
+          [
+            -100.0,
+            -64.937
+          ],
+          [
+            -90.0,
+            -47.971
+          ],
+          [
+            -80.0,
+            -35.462
+          ],
+          [
+            -70.0,
+            -26.235
+          ],
+          [
+            -60.0,
+            -19.421
+          ],
+          [
+            -50.0,
+            -14.37
+          ],
+          [
+            -40.0,
+            -10.587
+          ],
+          [
+            -30.0,
+            -7.673
+          ],
+          [
+            -20.0,
+            -5.259
+          ],
+          [
+            -10.0,
+            -2.917
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            10.0,
+            4.672
+          ],
+          [
+            20.0,
+            13.455
+          ],
+          [
+            30.0,
+            31.232
+          ]
+        ]
+      },
+      "damping": [
+        1.6,
+        1.6,
+        1.6
       ]
     },
     {
@@ -5281,6 +5693,79 @@
           0,
           1
         ]
+      ],
+      "elastic_curve": {
+        "Y": [
+          [
+            -120.0,
+            -119.173
+          ],
+          [
+            -110.0,
+            -87.952
+          ],
+          [
+            -100.0,
+            -64.937
+          ],
+          [
+            -90.0,
+            -47.971
+          ],
+          [
+            -80.0,
+            -35.462
+          ],
+          [
+            -70.0,
+            -26.235
+          ],
+          [
+            -60.0,
+            -19.421
+          ],
+          [
+            -50.0,
+            -14.37
+          ],
+          [
+            -40.0,
+            -10.587
+          ],
+          [
+            -30.0,
+            -7.673
+          ],
+          [
+            -20.0,
+            -5.259
+          ],
+          [
+            -10.0,
+            -2.917
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            10.0,
+            4.672
+          ],
+          [
+            20.0,
+            13.455
+          ],
+          [
+            30.0,
+            31.232
+          ]
+        ]
+      },
+      "damping": [
+        1.6,
+        1.6,
+        1.6
       ]
     },
     {
@@ -5365,6 +5850,107 @@
           0,
           1
         ]
+      ],
+      "elastic_curve": {
+        "Y": [
+          [
+            -5.0,
+            -9.162
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            10.0,
+            7.168
+          ],
+          [
+            20.0,
+            9.471
+          ],
+          [
+            30.0,
+            10.492
+          ],
+          [
+            40.0,
+            11.098
+          ],
+          [
+            50.0,
+            11.533
+          ],
+          [
+            60.0,
+            11.898
+          ],
+          [
+            70.0,
+            12.261
+          ],
+          [
+            80.0,
+            12.692
+          ],
+          [
+            90.0,
+            13.285
+          ],
+          [
+            100.0,
+            14.177
+          ],
+          [
+            110.0,
+            15.583
+          ],
+          [
+            120.0,
+            17.85
+          ],
+          [
+            130.0,
+            21.542
+          ],
+          [
+            140.0,
+            27.578
+          ]
+        ],
+        "X": [
+          [
+            -3.1,
+            -10.0
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            5.0,
+            10.0
+          ]
+        ],
+        "Z": [
+          [
+            -3.7,
+            -2.0
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            7.6,
+            2.0
+          ]
+        ]
+      },
+      "damping": [
+        0.16,
+        0.16,
+        0.16
       ]
     },
     {
@@ -5449,6 +6035,107 @@
           0,
           1
         ]
+      ],
+      "elastic_curve": {
+        "Y": [
+          [
+            -5.0,
+            -9.162
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            10.0,
+            7.168
+          ],
+          [
+            20.0,
+            9.471
+          ],
+          [
+            30.0,
+            10.492
+          ],
+          [
+            40.0,
+            11.098
+          ],
+          [
+            50.0,
+            11.533
+          ],
+          [
+            60.0,
+            11.898
+          ],
+          [
+            70.0,
+            12.261
+          ],
+          [
+            80.0,
+            12.692
+          ],
+          [
+            90.0,
+            13.285
+          ],
+          [
+            100.0,
+            14.177
+          ],
+          [
+            110.0,
+            15.583
+          ],
+          [
+            120.0,
+            17.85
+          ],
+          [
+            130.0,
+            21.542
+          ],
+          [
+            140.0,
+            27.578
+          ]
+        ],
+        "X": [
+          [
+            -5.0,
+            -10.0
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            3.1,
+            10.0
+          ]
+        ],
+        "Z": [
+          [
+            -7.6,
+            -2.0
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            3.7,
+            2.0
+          ]
+        ]
+      },
+      "damping": [
+        0.16,
+        0.16,
+        0.16
       ]
     },
     {
@@ -5533,7 +6220,61 @@
           0,
           1
         ]
-      ]
+      ],
+      "elastic_curve": {
+        "Y": [
+          [
+            -30.0,
+            -75.517
+          ],
+          [
+            -20.0,
+            -28.777
+          ],
+          [
+            -10.0,
+            -8.659
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            10.0,
+            3.729
+          ],
+          [
+            20.0,
+            5.344
+          ],
+          [
+            30.0,
+            6.116
+          ],
+          [
+            40.0,
+            6.987
+          ],
+          [
+            50.0,
+            11.137
+          ]
+        ],
+        "X": [
+          [
+            -35.0,
+            -9.45
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            30.0,
+            10.2
+          ]
+        ]
+      }
     },
     {
       "name": "anklerJnt",
@@ -5617,16 +6358,98 @@
           0,
           1
         ]
-      ]
+      ],
+      "elastic_curve": {
+        "Y": [
+          [
+            -30.0,
+            -75.517
+          ],
+          [
+            -20.0,
+            -28.777
+          ],
+          [
+            -10.0,
+            -8.659
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            10.0,
+            3.729
+          ],
+          [
+            20.0,
+            5.344
+          ],
+          [
+            30.0,
+            6.116
+          ],
+          [
+            40.0,
+            6.987
+          ],
+          [
+            50.0,
+            11.137
+          ]
+        ],
+        "X": [
+          [
+            -30.0,
+            -10.2
+          ],
+          [
+            0.0,
+            0.0
+          ],
+          [
+            35.0,
+            9.45
+          ]
+        ]
+      }
     }
   ],
   "metadata": {
     "name": "OpenMBD Female Model",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Open-source female multibody dynamics model",
-    "license": "GNU General Public License v3 License",
+    "license": "GNU General Public License v3",
     "contact": "Dr Gregory Tierney (g.tierney@ulster.ac.uk)",
-    "derivation": "Derived from openmbd_male.json. Segment masses per de Leva (1996) female mass fractions relative to total body mass (77.9 kg, CDC NHANES 2021-2023); trunk residual mass distributed using male internal trunk proportions. All segment masses normalised to sum exactly to 77.9 kg (normalisation factor 0.9745, accounting for de Leva fractions summing to 102.6% when clavicle and neck are included). Inertia tensors scaled by segment mass ratio and height-ratio squared (H_f/H_m = 0.9206). Shoulder geometry narrowed by factor 0.893 (biacromial ratio, CDC-NHANES/ANSUR). Hip geometry widened by factor 1.069 (sitting hip breadth ratio, ANSUR). Lower-limb ellipsoid radii scaled by cube-root of de Leva (1996) female/male mass fraction ratio. Biacromial and biiliac width scaling per Gordon et al. (1989)."
+    "derivation": "Derived from openmbd_male.json. Segment masses per de Leva (1996) female mass fractions relative to total body mass (77.9 kg, CDC NHANES 2021-2023); trunk residual mass distributed using male internal trunk proportions. All segment masses normalised to sum exactly to 77.9 kg (normalisation factor 0.9745, accounting for de Leva fractions summing to 102.6% when clavicle and neck are included). Inertia tensors scaled by segment mass ratio and height-ratio squared (H_f/H_m = 0.9206). Shoulder geometry narrowed by factor 0.893 (biacromial ratio, CDC-NHANES/ANSUR). Hip geometry widened by factor 1.069 (sitting hip breadth ratio, ANSUR). Lower-limb ellipsoid radii scaled by cube-root of de Leva (1996) female/male mass fraction ratio. Biacromial and biiliac width scaling per Gordon et al. (1989).",
+    "joint_restraints": {
+      "convention": "Restraints about the parent body axes, [Z, Y, X]; elastic_curve gives the moment (N m) resisting a deflection (deg) from the neutral angle; stiffness N m/rad, damping N m s/rad, friction N m. Built-in range-of-motion limits remain active.",
+      "standing_offset": "Hip, knee and ankle flexion/extension curves are shifted so the moment is zero in the standing pose (measured offsets removed: hip 8.6, knee 10.4, ankle 6.4 N m before sex scaling).",
+      "provisional": [
+        "kneelJnt Z",
+        "kneerJnt Z",
+        "elbowlJnt",
+        "elbowrJnt",
+        "upperbackJnt",
+        "neckJnt",
+        "headJnt",
+        "damping on all joints"
+      ],
+      "sex_scaling": "Female moments and damping = male x 0.80 (mass x height ratio) except where sex-specific data are used (ankle inversion/eversion, wrist, knee valgus).",
+      "sources": [
+        "Riener R, Edrich T (1999) J Biomech 32(5):539-544, doi:10.1016/S0021-9290(99)00009-3 (hip, knee, ankle flexion/extension)",
+        "McGill S, Seguin J, Bennett G (1994) Spine 19(6):696-704 (lower back, all axes)",
+        "Deep K (2014) Clin Orthop Relat Res 472(11):3426-3431, doi:10.1007/s11999-014-3865-6 (knee varus/valgus)",
+        "Polich J et al. (2023) Stapp Car Crash Conference short communication SC23-08 (ankle inversion/eversion)",
+        "Formica D et al. (2012) J Neurophysiol 108(4):1158-1166, doi:10.1152/jn.01014.2011 (wrist)",
+        "Moewis P et al. (2016) PLoS ONE 11(7):e0159600 (knee axial rotation, provisional)",
+        "Wiegner AW, Watts RL (1986) J Neurol Neurosurg Psychiatry 49(10):1171-1176 (elbow, provisional)",
+        "Liebsch C, Wilke H-J (2020) Front Bioeng Biotechnol 8:46 (upper back, provisional)",
+        "Nightingale RW et al. (2002) J Biomech 35(6):725-732, doi:10.1016/S0021-9290(02)00037-4 (neck and head flexion/extension, provisional)",
+        "Liu M et al. (2024) J Biomech 168:112090, doi:10.1016/j.jbiomech.2024.112090 (neck and head lateral bending and axial rotation, provisional)",
+        "Huang H-Y et al. (2020) arXiv:1908.07800; Franken HM et al. (1993) IEEE Trans Rehabil Eng 1(3):154-164; Falzarano V et al. (2021) Front Hum Neurosci 15:726841; de Jager MKJ (1996) PhD thesis, TU Eindhoven (joint damping, provisional)"
+      ]
+    }
   },
   "sex": "female",
   "height_cm": 161.2,
