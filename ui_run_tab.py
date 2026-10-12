@@ -1,6 +1,6 @@
 # ui_run_tab.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.1 
+# Version: 1.4
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import tkinter as tk
@@ -141,8 +141,8 @@ class RunnerTab(ttk.Frame):
                         if not self.is_running:
                             break
                         eng.step()
-                        # BF-E: do NOT call eng.record_state() here.
-                        # step() records internally every 10 steps automatically.
+                        # step() records state internally every
+                        # eng.record_every steps; do not record here.
                         step_count += 1
                 except ZeroDivisionError:
                     self.is_running = False
@@ -206,7 +206,7 @@ class RunnerTab(ttk.Frame):
         self.update()
         try:
             w, h = self._gif_frame_wh
-            # Fixed 500 ms per frame 
+            # Fixed 500 ms per frame
             imgs = [PILImage.frombytes('RGBA', (w, h), b) for b in self._gif_frames]
             imgs[0].save(
                 gif_path, save_all=True, append_images=imgs[1:],
@@ -216,8 +216,10 @@ class RunnerTab(ttk.Frame):
         except Exception as exc:
             import traceback; traceback.print_exc()
             self.lbl.config(text=f'Finished. GIF error: {exc}')
+
     def export_csv(self, auto=False):
-        if not self.app.engine.state_history:
+        eng = self.app.engine
+        if not eng.state_history:
             if not auto:
                 messagebox.showwarning("No Data", "No simulation data to export.")
             return
@@ -242,7 +244,7 @@ class RunnerTab(ttk.Frame):
             with open(kinematics_file, 'w', newline='') as f:
                 writer = csv.writer(f)
                 header = ['Time']
-                for b in self.app.engine.bodies:
+                for b in eng.bodies:
                     header.extend([
                         f'{b.name}_PosX', f'{b.name}_PosY', f'{b.name}_PosZ',
                         f'{b.name}_QuatW', f'{b.name}_QuatX', f'{b.name}_QuatY', f'{b.name}_QuatZ',
@@ -254,7 +256,7 @@ class RunnerTab(ttk.Frame):
                         f'{b.name}_TorqueX', f'{b.name}_TorqueY', f'{b.name}_TorqueZ',
                     ])
                 writer.writerow(header)
-                for state in self.app.engine.state_history:
+                for state in eng.state_history:
                     row = [state['time']]
                     for bs in state['body_states']:
                         la = bs.get('lin_accel', [0.0, 0.0, 0.0])
@@ -271,18 +273,53 @@ class RunnerTab(ttk.Frame):
                         ])
                     writer.writerow(row)
 
+            n_joints = sum(1 for (_, _, ji, dof) in eng.joint_list
+                           if not ji.get('is_root_joint', False) and dof > 0)
+            retention = getattr(eng, 'contact_energy_retention', None)
             with open(summary_file, 'w') as f:
                 f.write(f"Simulation Summary - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write("=" * 50 + "\n\n")
                 f.write(f"Duration: {self.app.duration} seconds\n")
-                f.write(f"Time step (dt): {self.app.engine.dt} seconds\n")
-                f.write(f"Friction coefficient: {self.app.engine.friction_coef}\n")
-                f.write(f"Contact damping: {self.app.engine.contact_damping} N*s/m\n")
+                f.write(f"Time step (dt): {eng.dt} seconds\n")
+                f.write(f"Integrator: semi-implicit Euler (fixed step)\n")
+                f.write(f"Friction coefficient: {eng.friction_coef}\n")
+                f.write(f"Contact damping: {eng.contact_damping} N*s/m\n")
+                f.write(f"Contact evaluation: {getattr(eng, 'contact_evaluation_mode', 'none')}\n")
+                f.write(f"Surfaces without unloading curve: "
+                        f"{'elastic' if retention is None else f'unloading = {retention} x loading'}\n")
+                f.write(f"Dynamic amplification: C1={eng.dyn_amp_C1}, C2={eng.dyn_amp_C2}, "
+                        f"C3={eng.dyn_amp_C3}, C4={eng.dyn_amp_C4}\n")
+                restr = getattr(eng, '_joint_restraints', {}) or {}
+                if restr:
+                    r1, r2 = eng.joint_friction_ramp
+                    f.write(f"Joint restraints (about parent axes, [Z,Y,X]; friction ramp "
+                            f"{r1}-{r2} rad/s):\n")
+
+                    def _zyx(v, deg=False):
+                        v = np.degrees(v) if deg else v
+                        return f"[{v[2]:g}, {v[1]:g}, {v[0]:g}]"
+
+                    for (mi, jn), r in sorted(restr.items()):
+                        curves = "".join(ax for ax, c in zip("XYZ", r.curves)
+                                         if c is not None)
+                        f.write(f"  model {mi} {jn}: stiffness {_zyx(r.K)} N*m/rad"
+                                f"{' (curve on ' + curves + ')' if curves else ''}, "
+                                f"neutral {_zyx(r.phi0, True)} deg, "
+                                f"damping {_zyx(r.C)} N*m*s/rad, "
+                                f"friction {_zyx(r.F)} N*m, "
+                                f"ROM limit {'on' if r.rom_limits else 'off'}\n")
+                else:
+                    f.write("Joint restraints: none (all joints free apart from "
+                            "range-of-motion limits)\n")
+                f.write(f"Self-contact enabled: {getattr(eng, 'enable_self_contact', False)}\n")
                 f.write(f"Steps with clamped accelerations (should be 0): "
-                        f"{getattr(self.app.engine, 'qddot_clamp_count', 0)}\n")
-                f.write(f"Total simulation steps: {len(self.app.engine.state_history)}\n")
-                f.write(f"Total contacts recorded: {sum(len(c) for c in self.app.engine.contact_history)}\n")
-                f.write(f"Total joint constraints: {len(self.app.engine.joint_constraints)}\n\n")
+                        f"{getattr(eng, 'qddot_clamp_count', 0)}\n")
+                f.write(f"Recorded output frames: {len(eng.state_history)}\n")
+                f.write(f"Total contacts recorded: {sum(len(c) for c in eng.contact_history)}\n")
+                f.write(f"Articulated joints: {n_joints}\n\n")
+                f.write("Output frames: position and quaternion in global axes; "
+                        "velocity, acceleration, contact force and torque\n"
+                        "resolved in each body's local axes.\n\n")
                 f.write("Models:\n")
                 for mid, model in self.app.models.items():
                     f.write(f"  Model {mid}: {model.path}\n")
