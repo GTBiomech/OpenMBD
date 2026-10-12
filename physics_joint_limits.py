@@ -1,43 +1,44 @@
 # physics_joint_limits.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.2 
+# Version: 1.4
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 """
-Physiologically realistic joint range-of-motion (ROM) enforcement.
+Physiological joint range-of-motion (ROM) restraints.
 
 Each joint has a soft limit implemented as a penalty spring-damper that
 activates only when an anatomical joint angle leaves its physiological range.
 
 Anatomical angles
 -----------------
-For a quaternion spherical joint the relative rotation R_j (the rotation
-between the parent-side T1 frame and the child-side T2 frame) is decomposed
-as an intrinsic Y-X-Z sequence
+Angles are measured about the PARENT body axes, the same axes used for the
+joint-angle inputs (see joint_conventions.py): anterior = +x, left = +y,
+up = +z, right-handed.  The relative rotation of the child, with the
+zero-angle offset removed,
 
-    R_j = Ry(a) @ Rx(b) @ Rz(c)
+    R_user = R_T1 @ R_j @ R_T1^T
 
-    a = rotation about the joint Y axis  -> sagittal plane  (flexion/extension)
-    b = rotation about the joint X axis  -> frontal plane   (ab/adduction,
-                                            lateral flexion, inversion/eversion)
-    c = rotation about the joint Z axis  -> segment long axis (axial rotation)
+is decomposed as an intrinsic Y-X-Z sequence
 
-This is the ordering of a joint coordinate system (flexion first, axial
-rotation last).  Its singularity is at b = +-90 deg, i.e. 90 deg of frontal-
-plane motion, which lies outside the range of every joint except the
-shoulder.  At small angles a, b, c coincide with the UI's Y, X and Z joint
-angle fields.
+    R_user = Ry(a) @ Rx(b) @ Rz(c)
 
-Sign conventions (bundled human models, verified against the model geometry
-in the neutral standing pose; anterior = +x, left = +y, up = +z):
-  a > 0 : distal end of a downward segment moves ANTERIOR
-          (hip/shoulder/elbow flexion, knee HYPER-extension, ankle
-          dorsiflexion); top of an upward segment moves POSTERIOR
-          (spine/neck/head extension)
+    a = rotation about Y  -> sagittal plane  (flexion/extension)
+    b = rotation about X  -> frontal plane   (ab/adduction, lateral flexion,
+                                              inversion/eversion)
+    c = rotation about Z  -> segment long axis (axial rotation)
+
+so flexion is resolved first and axial rotation last.  The singularity is at
+b = +-90 deg, outside the range of every joint except the shoulder.  At small
+angles a, b, c equal the Y, X and Z joint-angle inputs.
+
+Sign conventions (right-handed about the parent axes):
+  a > 0 : distal end of a downward segment moves POSTERIOR (knee flexion,
+          hip/shoulder extension, elbow extension, ankle plantarflexion);
+          top of an upward segment moves ANTERIOR (spine/neck/head flexion)
   b > 0 : distal end of a downward segment moves to the model's LEFT
           (left hip/shoulder abduction, right hip/shoulder adduction; left
           ankle eversion, right ankle inversion); top of an upward segment
           moves to the RIGHT (right lateral flexion)
-  c > 0 : axial rotation about the segment long axis
+  c > 0 : anticlockwise axial rotation seen from above
 
 Two (a, b, c) triplets describe every rotation.  The one with the lower
 penalty energy is used, so large flexion (knee 140 deg, hip 130 deg, shoulder
@@ -46,22 +47,17 @@ axial rotation.
 
 Generalised forces
 ------------------
-The penalty torques tau_anat are conjugate to the angle RATES.  Their
-generalised force on the joint's angular-velocity DOFs follows from virtual
-power, tau_anat . d(angles)/dt = Q . omega_joint with omega_joint = E @ rates:
+The penalty torques tau are conjugate to the angle RATES.  With
+omega_u = E @ rates the angular velocity of R_user in its rotated frame,
+virtual power gives the generalised force on omega_u as E^{-T} @ tau, which
+keeps the elastic part of the limit exactly conservative.  E^{-T} is exact
+for |b| < ~72 deg and uses a small Tikhonov damping beyond that, so it stays
+bounded at b = +-90 deg.  The engine's spherical-joint velocity is the
+relative angular velocity in child-body axes, omega_child, and
+omega_u = R_T1 @ R_T2^T @ omega_child.
 
-    Q_joint = E^{-T} @ tau_anat
-
-which makes the elastic part of the limit exactly conservative.  E^{-T} is
-evaluated exactly for |b| < ~78 deg and with a small Tikhonov damping
-beyond that, so it stays bounded at b = +-90 deg.
-
-History: the previous version used ZYX Euler angles with E^T instead of
-E^{-T}, a ROM table whose Z/X anatomical assignments were swapped relative to
-the model's joint frames, reversed knee and ankle sagittal signs (every knee
-flexion was resisted from 0 deg: 126 N m at 60 deg), and arcsin-limited
-middle angles that turned elbow/hip flexion beyond 90 deg into spurious
-240-360 N m torques.
+Restraint law (per anatomical axis, outside the range only):
+    tau = -k * violation - c * (rate in the violating direction)
 
 ROM sources:
   American Academy of Orthopaedic Surgeons (AAOS) normative values,
@@ -84,10 +80,10 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 _ROM_DEG = {
-    # ── Hip joints ────────────────────────────────────────────────────────
+    # ── Hip joints (flexion is NEGATIVE: the thigh swings anterior) ──────
     'hipl': {
         'axes': [
-            ('flexion(+)/extension(-)',     0,  -30, 130),
+            ('extension(+)/flexion(-)',     0, -130,  30),
             ('abduction(+)/adduction(-)',   1,  -30,  45),
             ('axial rotation',              2,  -50,  50),
         ],
@@ -95,17 +91,17 @@ _ROM_DEG = {
     },
     'hipr': {
         'axes': [
-            ('flexion(+)/extension(-)',     0,  -30, 130),
+            ('extension(+)/flexion(-)',     0, -130,  30),
             ('adduction(+)/abduction(-)',   1,  -45,  30),
             ('axial rotation',              2,  -50,  50),
         ],
         'stiffness': 60.0, 'damping': 3.0,
     },
 
-    # ── Knee joints (flexion is NEGATIVE: the shank swings posterior) ─────
+    # ── Knee joints (flexion is POSITIVE: the shank swings posterior) ────
     'kneel': {
         'axes': [
-            ('extension(+)/flexion(-)',     0, -140,   0),
+            ('flexion(+)/extension(-)',     0,    0, 140),
             ('varus/valgus',                1,  -10,  10),
             ('axial rotation',              2,  -10,  10),
         ],
@@ -113,7 +109,7 @@ _ROM_DEG = {
     },
     'kneer': {
         'axes': [
-            ('extension(+)/flexion(-)',     0, -140,   0),
+            ('flexion(+)/extension(-)',     0,    0, 140),
             ('varus/valgus',                1,  -10,  10),
             ('axial rotation',              2,  -10,  10),
         ],
@@ -123,7 +119,7 @@ _ROM_DEG = {
     # ── Ankle joints ──────────────────────────────────────────────────────
     'anklel': {
         'axes': [
-            ('dorsiflexion(+)/plantarflexion(-)', 0, -45, 20),
+            ('plantarflexion(+)/dorsiflexion(-)', 0, -20, 45),
             ('eversion(+)/inversion(-)',          1, -35, 20),
             ('adduction/abduction',               2, -15, 15),
         ],
@@ -131,7 +127,7 @@ _ROM_DEG = {
     },
     'ankler': {
         'axes': [
-            ('dorsiflexion(+)/plantarflexion(-)', 0, -45, 20),
+            ('plantarflexion(+)/dorsiflexion(-)', 0, -20, 45),
             ('inversion(+)/eversion(-)',          1, -20, 35),
             ('adduction/abduction',               2, -15, 15),
         ],
@@ -143,7 +139,7 @@ _ROM_DEG = {
     # of any three-angle decomposition; limits near that pose are approximate.
     'shoulderl': {
         'axes': [
-            ('flexion(+)/extension(-)',     0,  -60, 180),
+            ('extension(+)/flexion(-)',     0, -180,  60),
             ('abduction(+)/adduction(-)',   1,  -30, 180),
             ('int/ext rotation',            2,  -90,  90),
         ],
@@ -151,17 +147,17 @@ _ROM_DEG = {
     },
     'shoulderr': {
         'axes': [
-            ('flexion(+)/extension(-)',     0,  -60, 180),
+            ('extension(+)/flexion(-)',     0, -180,  60),
             ('adduction(+)/abduction(-)',   1, -180,  30),
             ('int/ext rotation',            2,  -90,  90),
         ],
         'stiffness': 25.0, 'damping': 1.5,
     },
 
-    # ── Elbow joints ──────────────────────────────────────────────────────
+    # ── Elbow joints (flexion is NEGATIVE: the forearm swings anterior) ──
     'elbow': {
         'axes': [
-            ('flexion(+)/extension(-)',     0,    0, 145),
+            ('extension(+)/flexion(-)',     0, -145,   0),
             ('varus/valgus',                1,  -10,  10),
             ('pronation/supination',        2,  -90,  90),
         ],
@@ -184,7 +180,7 @@ _ROM_DEG = {
     # ── Lumbar spine (lowerbackJnt) ───────────────────────────────────────
     'lowerback': {
         'axes': [
-            ('extension(+)/flexion(-)',     0,  -45,  25),
+            ('flexion(+)/extension(-)',     0,  -25,  45),
             ('lateral flex R(+)/L(-)',      1,  -30,  30),
             ('axial rotation',              2,  -40,  40),
         ],
@@ -193,7 +189,7 @@ _ROM_DEG = {
     # ── Thoracic spine (upperbackJnt) ─────────────────────────────────────
     'upperbackjnt': {
         'axes': [
-            ('extension(+)/flexion(-)',     0,  -30,  20),
+            ('flexion(+)/extension(-)',     0,  -20,  30),
             ('lateral flex R(+)/L(-)',      1,  -25,  25),
             ('axial rotation',              2,  -35,  35),
         ],
@@ -203,7 +199,7 @@ _ROM_DEG = {
     # ── Neck joints ───────────────────────────────────────────────────────
     'neck': {
         'axes': [
-            ('extension(+)/flexion(-)',     0,  -70,  60),
+            ('flexion(+)/extension(-)',     0,  -60,  70),
             ('lateral flex R(+)/L(-)',      1,  -45,  45),
             ('axial rotation',              2,  -80,  80),
         ],
@@ -211,7 +207,7 @@ _ROM_DEG = {
     },
     'head': {
         'axes': [
-            ('extension(+)/flexion(-)',     0,  -30,  30),
+            ('flexion(+)/extension(-)',     0,  -30,  30),
             ('lateral flexion',             1,  -20,  20),
             ('axial rotation',              2,  -40,  40),
         ],
@@ -232,11 +228,13 @@ for key, entry in _ROM_DEG.items():
 # Tikhonov damping for E^{-T} / E^{-1} near the b = +-90 deg singularity.
 # The damping is zero while |cos b| >= _INV_DAMPING_COS (|b| <= 72.5 deg), so
 # the mapping is exact there, and ramps smoothly to _INV_DAMPING^2 at cos b = 0.
-# With these values the gain of the damped E^{-T} never exceeds its exact
-# value at |b| = 72.5 deg (4.7), so torques stay bounded through the shoulder's
-# 90 deg abduction pose.  Only the shoulder range reaches |b| > 72.5 deg.
 _INV_DAMPING = 0.15
 _INV_DAMPING_COS = 0.3
+
+
+def _rom_enabled(engine, key):
+    r = getattr(engine, '_joint_restraints', {}).get(key)
+    return True if r is None else bool(getattr(r, 'rom_limits', True))
 
 
 def _find_rom(joint_name: str):
@@ -253,9 +251,7 @@ def _wrap(x):
 
 
 def _yxz_candidates(R):
-    """
-    Both intrinsic Y-X-Z solutions (a, b, c) of R = Ry(a) Rx(b) Rz(c).
-    """
+    """Both intrinsic Y-X-Z solutions (a, b, c) of R = Ry(a) Rx(b) Rz(c)."""
     sb = float(np.clip(-R[1, 2], -1.0, 1.0))
     b = np.arcsin(sb)
     cb = np.cos(b)
@@ -273,9 +269,8 @@ def _yxz_candidates(R):
 
 def _E_joint_yxz(angles):
     """
-    omega_joint = E @ [a_dot, b_dot, c_dot] for R = Ry(a) Rx(b) Rz(c), with
-    omega_joint resolved in the rotated (child-side) joint frame.
-    Columns: Y axis after Rx Rz, X axis after Rz, Z axis.
+    omega = E @ [a_dot, b_dot, c_dot] for R = Ry(a) Rx(b) Rz(c), with omega
+    resolved in the rotated (child-side) frame.
     """
     b, c = angles[1], angles[2]
     cb, sb = np.cos(b), np.sin(b)
@@ -301,14 +296,27 @@ def _violations(angles, rom):
     return v
 
 
-def anatomical_angles(R_joint, rom):
+def anatomical_angles(R_user, rom):
     """
-    Anatomical (a, b, c) angles of a joint rotation, choosing whichever of the
-    two Y-X-Z solutions has the lower penalty energy for this ROM entry.
+    Anatomical (a, b, c) angles of a joint rotation about the parent axes,
+    choosing whichever of the two Y-X-Z solutions has the lower penalty
+    energy for this ROM entry.
     """
-    s1, s2 = _yxz_candidates(R_joint)
+    s1, s2 = _yxz_candidates(R_user)
     v1, v2 = _violations(s1, rom), _violations(s2, rom)
     return s1 if float(v1 @ v1) <= float(v2 @ v2) else s2
+
+
+def _joint_frames(jinfo):
+    R1 = np.asarray(jinfo['T1'], dtype=float)[:3, :3]
+    R2 = np.asarray(jinfo['T2'], dtype=float)[:3, :3]
+    return R1, R2
+
+
+def user_rotation(jinfo, R_joint):
+    """R_user = R_T1 @ R_j @ R_T1^T (identity at zero input angle)."""
+    R1, _ = _joint_frames(jinfo)
+    return R1 @ R_joint @ R1.T
 
 
 def compute_joint_limit_torques(engine) -> np.ndarray:
@@ -317,10 +325,10 @@ def compute_joint_limit_torques(engine) -> np.ndarray:
     joint outside its physiological range.
 
     Quaternion spherical joints (dof = 4)
-        angles   : anatomical (a, b, c) of the joint rotation R_j
-        rates    : E^{-1} @ omega_joint,  omega_joint = R_T2^T @ qdot[s:s+3]
+        angles   : anatomical (a, b, c) of R_user
+        rates    : E^{-1} @ omega_u,  omega_u = R_T1 @ R_T2^T @ qdot[s:s+3]
         torques  : tau = -k * violation - c * (rate in the violating direction)
-        Q        : R_T2 @ E^{-T} @ tau   (virtual-power dual; see module doc)
+        Q        : R_T2 @ R_T1^T @ E^{-T} @ tau
 
     Returns Q_rom to be added to the generalised forces in assemble_A_and_B.
     """
@@ -339,6 +347,8 @@ def compute_joint_limit_torques(engine) -> np.ndarray:
         rom = _find_rom(jname)
         if rom is None:
             continue
+        if not _rom_enabled(engine, (midx, jname)):
+            continue                    # switched off by a joint restraint
 
         s, _ = engine.joint_dof_map[(midx, jname)]
         k    = rom['stiffness']
@@ -349,21 +359,20 @@ def compute_joint_limit_torques(engine) -> np.ndarray:
             norm = float(np.linalg.norm(qjt))
             if norm < 1e-12:
                 continue
-            R = quat_to_matrix(qjt / norm)
-            angles = anatomical_angles(R, rom)
+            R1, R2 = _joint_frames(jinfo)
+            R_user = R1 @ quat_to_matrix(qjt / norm) @ R1.T
+            angles = anatomical_angles(R_user, rom)
             viol = _violations(angles, rom)
             if not np.any(viol):
                 continue
 
-            # qdot[s:s+3] is resolved in the CHILD body frame; the joint
-            # rotation's own rate is omega_j = R_T2^T @ omega_child.
-            R2T = np.asarray(jinfo['T2'], dtype=float)[:3, :3].T
-            omega_j = R2T @ qdot[s:s+3]
+            M = R1 @ R2.T                 # child-body axes -> rotated user frame
+            omega_u = M @ qdot[s:s+3]
             E = _E_joint_yxz(angles)
             cb2 = np.cos(angles[1]) ** 2
             lam2 = _INV_DAMPING ** 2 * max(0.0, 1.0 - cb2 / _INV_DAMPING_COS ** 2)
             EtE = E.T @ E + lam2 * np.eye(3)
-            rates = np.linalg.solve(EtE, E.T @ omega_j)          # ~ E^{-1} omega
+            rates = np.linalg.solve(EtE, E.T @ omega_u)          # ~ E^{-1} omega
 
             tau = np.zeros(3)
             for i in range(3):
@@ -372,8 +381,8 @@ def compute_joint_limit_torques(engine) -> np.ndarray:
                 elif viol[i] < 0.0:
                     tau[i] = -k * viol[i] - c * min(0.0, rates[i])
 
-            Q_joint = E @ np.linalg.solve(EtE, tau)                # ~ E^{-T} tau
-            Q[s:s+3] += R2T.T @ Q_joint
+            Q_u = E @ np.linalg.solve(EtE, tau)                    # ~ E^{-T} tau
+            Q[s:s+3] += M.T @ Q_u
 
         elif dof == 3:
             # --- Legacy Euler spherical joint (not used by bundled models) ---
@@ -388,7 +397,7 @@ def compute_joint_limit_torques(engine) -> np.ndarray:
                     Q[s + dof_idx] += k * (lo - theta) - c * min(0.0, thetad)
 
         elif dof == 1:
-            # --- Revolute joint ---
+            # --- Revolute joint: angle about the hinge axis ---
             for (_, dof_idx, lo, hi) in rom['axes']:
                 if dof_idx >= dof:
                     continue
@@ -406,7 +415,7 @@ def get_joint_limit_status(engine) -> list:
     """
     Return a list of (joint_name, axis_label, angle_deg, limit_deg,
     violation_deg) for every joint currently outside its physiological range.
-    Useful for debugging and visualisation.
+    Angles are about the parent-body axes.
     """
     from physics_utils import quat_to_matrix
 
@@ -419,6 +428,8 @@ def get_joint_limit_status(engine) -> list:
         rom = _find_rom(jname)
         if rom is None:
             continue
+        if not _rom_enabled(engine, (midx, jname)):
+            continue                    # switched off by a joint restraint
         s, _ = engine.joint_dof_map[(midx, jname)]
 
         if dof == 4:
@@ -426,7 +437,8 @@ def get_joint_limit_status(engine) -> list:
             n = float(np.linalg.norm(qjt))
             if n < 1e-12:
                 continue
-            angles = anatomical_angles(quat_to_matrix(qjt / n), rom)
+            angles = anatomical_angles(
+                user_rotation(jinfo, quat_to_matrix(qjt / n)), rom)
         else:
             angles = np.zeros(3)
             angles[:dof] = q[s:s + min(dof, 3)]
