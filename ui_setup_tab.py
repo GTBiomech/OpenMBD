@@ -1,6 +1,6 @@
 # ui_setup_tab.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 1.1 
+# Version: 1.5
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 
 import tkinter as tk
@@ -23,6 +23,11 @@ from ui_controls import AngleControlFrame
 _MODEL_LABELS  = ["Model A", "Model B", "Model C"]
 _MODEL_COLOURS = ["cyan", "magenta", "yellow"]
 _MAX_MODELS    = 3
+
+# Input convention shown under the joint selector (see joint_conventions.py)
+_CONVENTION_HINT = ("Right-handed about the PARENT body axes (+ = anticlockwise "
+                    "looking down the axis).\nAngles applied X, then Y′, then Z″. "
+                    "Load the occupant/pedestrian model first.")
 
 
 class SimulationCreatorTab(ttk.Frame):
@@ -194,31 +199,38 @@ class SimulationCreatorTab(ttk.Frame):
         self.cmb_joints.pack(fill=tk.X)
         self.cmb_joints.bind("<<ComboboxSelected>>", self.on_joint_sel)
 
+        ttk.Label(self.cf, text=_CONVENTION_HINT, foreground='gray',
+                  justify=tk.LEFT, wraplength=330).pack(anchor='w', pady=(4, 2))
+
+        ttk.Label(self.cf, text="Joint Angle (deg):",
+                  foreground='gray').pack(anchor='w', pady=(2, 0))
         self.angle_controls = []
-        for angle_name in ['Yaw (Z)', 'Pitch (Y)', 'Roll (X)']:
+        for angle_name in ['Rot Z', 'Rot Y', 'Rot X']:
             ctrl = AngleControlFrame(self.cf, angle_name,
-                                     command=self.on_angle_change)
+                                     command=self.on_angle_change, unit="°")
             ctrl.pack(fill=tk.X, pady=2)
             self.angle_controls.append(ctrl)
 
-        ttk.Label(self.cf, text="Joint Angular Vel (Z Y X) rad/s:",
+        ttk.Label(self.cf, text="Joint Angular Vel (rad/s):",
                   foreground='gray').pack(anchor='w', pady=(6, 0))
         self.joint_vel_controls = []
-        for vel_name in ['ωZ (rad/s)', 'ωY (rad/s)', 'ωX (rad/s)']:
+        for vel_name in ['ωZ', 'ωY', 'ωX']:
             ctrl = AngleControlFrame(self.cf, vel_name, from_=-12, to=12,
-                                     command=self.on_joint_vel_change)
+                                     command=self.on_joint_vel_change,
+                                     unit="rad/s")
             ctrl.pack(fill=tk.X, pady=1)
             self.joint_vel_controls.append(ctrl)
 
         # ── Torque pulse controls ──────────────────────────────────────
         ttk.Separator(self.cf, orient='horizontal').pack(fill=tk.X,
                                                          pady=(8, 2))
-        ttk.Label(self.cf, text="Joint Torque Pulse (N·m):",
+        ttk.Label(self.cf, text="Joint Torque Pulse, half-sine peak (N·m):",
                   foreground='gray').pack(anchor='w')
         self.joint_torque_controls = []
-        for trq_name in ['τZ (N·m)', 'τY (N·m)', 'τX (N·m)']:
+        for trq_name in ['τZ', 'τY', 'τX']:
             ctrl = AngleControlFrame(self.cf, trq_name, from_=-500, to=500,
-                                     command=self.on_joint_torque_change)
+                                     command=self.on_joint_torque_change,
+                                     unit="N·m")
             ctrl.pack(fill=tk.X, pady=1)
             self.joint_torque_controls.append(ctrl)
 
