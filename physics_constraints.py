@@ -1,6 +1,6 @@
 # physics_constraints.py
 # Citation: Tierney. OpenMBD: An Open-Source Multibody Dynamics Simulator for Biomechanics Research and Education. F1000Research, 2026.
-# Version: 2.0
+# Version: 2.1
 # Research Contact: Dr Gregory Tierney (g.tierney@ulster.ac.uk)
 """
 Elastic ellipsoid contact model.
@@ -61,7 +61,24 @@ f_l.  In closed form, for x < x_max:
 The history of each contact pair is kept for the whole simulation, so a
 surface that has been loaded and unloaded responds along its unloading
 branch on the next contact.  Hysteresis is active only once x_max exceeds the
-elastic limit.  Per-ellipsoid keys in the model file:
+elastic limit.
+
+When both surfaces of an ellipsoid-ellipsoid contact deform (both loading
+curves strictly increasing), each surface keeps its own history: surface i
+follows the law above with its own curves, slope and largest deformation
+x_max,i, both surfaces carry the same force, and the penetration is the sum
+of the two deformations,
+
+    x = x_A(F) + x_B(F)
+
+A surface without an unloading curve is elastic.  On first loading this is
+the series loading characteristic; on unloading and reloading each surface
+moves along its own branch.  The force is found from the exact inverse of
+each surface's branch,
+
+    x_i(F) = max( f_l^-1(F), min( f_u^-1(F), x_max,i - (f_l(x_max,i) - F) / s ) )
+
+and a bracketed root solve of x_A(F) + x_B(F) = x.  Per-ellipsoid keys in the model file:
 
     "unload_curve"      : [[x, F], ...]  (omit for a purely elastic surface)
     "hysteresis_slope"  : N/m (default: steepest slope of the loading curve)
@@ -218,6 +235,100 @@ class ContactCharacteristic:
         return max(0.0, min(f_load, max(f_unl, f_slope)))
 
 
+class SeriesHysteresisCharacteristic(ContactCharacteristic):
+    """
+    Two deformable surfaces in series, each with its own hysteresis history
+    (see the module docstring).  The pair state holds the largest deformation
+    of each surface in state['x_max_ab'].
+    """
+
+    _TOL_X = 1e-12      # m, penetration tolerance of the force solve
+
+    def __init__(self, la, ua, sa, xa, lb, ub, sb, xb):
+        super().__init__(series_curve(la, lb), None, None, xa + xb, la, lb)
+        self.surfaces = [self._surface(la, ua, sa, xa), self._surface(lb, ub, sb, xb)]
+
+    @staticmethod
+    def _surface(load, unload, slope, elastic_limit):
+        return {'load': load,
+                'unload': unload,
+                'unload_invertible': is_strictly_increasing(unload),
+                'slope': float(slope) if slope is not None else max_slope(load),
+                'xe': float(elastic_limit)}
+
+    @staticmethod
+    def _branch_force(s, x, x_max):
+        """Force on one surface at deformation x (closed-form hysteresis law)."""
+        f_load = max(0.0, interp_extrap(x, s['load']))
+        if s['unload'] is None or x >= x_max or x_max <= s['xe']:
+            return f_load
+        f_max = max(0.0, interp_extrap(x_max, s['load']))
+        f_unl = max(0.0, interp_extrap(x, s['unload']))
+        return max(0.0, min(f_load, max(f_unl, f_max - s['slope'] * (x_max - x))))
+
+    def _deformation(self, s, F, x_max):
+        """Deformation of one surface carrying force F > 0 on its current branch."""
+        x_load = max(0.0, inverse_extrap(F, s['load']))
+        if s['unload'] is None or x_max <= s['xe']:
+            return x_load
+        f_max = max(0.0, interp_extrap(x_max, s['load']))
+        if F >= f_max:
+            return x_load
+        if s['unload_invertible']:
+            x_line = x_max - (f_max - F) / s['slope'] if s['slope'] > 0.0 else -np.inf
+            x_unl = inverse_extrap(F, s['unload'])
+            return max(x_load, min(x_unl, x_line))
+        # Unloading curve that is not strictly increasing: invert numerically.
+        lo, hi = 0.0, x_max
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            if self._branch_force(s, mid, x_max) < F:
+                lo = mid
+            else:
+                hi = mid
+        return hi
+
+    def elastic_force(self, x, state):
+        if x <= 0.0:
+            return 0.0
+        sa, sb = self.surfaces
+        xm = state.setdefault('x_max_ab', [0.0, 0.0])
+        f_series = max(0.0, interp_extrap(x, self.load))
+        f_max = max(max(0.0, interp_extrap(xm[0], sa['load'])),
+                    max(0.0, interp_extrap(xm[1], sb['load'])))
+        if f_series >= f_max:
+            # Both surfaces on their loading curves (first loading or beyond
+            # the previous maximum): the series characteristic is exact.
+            F = f_series
+        else:
+            def gap(F):
+                return self._deformation(sa, F, xm[0]) + self._deformation(sb, F, xm[1]) - x
+            lo, hi = 0.0, f_series          # x(F) >= series^-1(F), so F <= f_series
+            g_lo, g_hi = -x, gap(hi)
+            if g_hi <= 0.0:
+                F = hi
+            else:
+                F = hi
+                for _ in range(100):        # Illinois-modified regula falsi
+                    F = (lo * g_hi - hi * g_lo) / (g_hi - g_lo)
+                    g = gap(F)
+                    if abs(g) <= self._TOL_X:
+                        break
+                    if g > 0.0:
+                        hi, g_hi = F, g
+                        g_lo *= 0.5
+                    else:
+                        lo, g_lo = F, g
+                        g_hi *= 0.5
+                    if hi - lo <= 1e-12 * max(1.0, hi):
+                        break
+        if F > 0.0:
+            xm[0] = max(xm[0], self._deformation(sa, F, xm[0]))
+            xm[1] = max(xm[1], self._deformation(sb, F, xm[1]))
+        state['x_max'] = max(state.get('x_max', 0.0), x)
+        return F
+
+
 _characteristic_cache = {}
 
 
@@ -239,19 +350,12 @@ def resolve_characteristic(ell_a, ell_b, energy_retention=None):
         lb, ub, sb, xb = _surface_props(ell_b, energy_retention)
         inc_a, inc_b = is_strictly_increasing(la), is_strictly_increasing(lb)
         if inc_a and inc_b:
-            load = series_curve(la, lb)
-            unload = None
             if ua is not None or ub is not None:
-                cu_a = ua if ua is not None else la
-                cu_b = ub if ub is not None else lb
-                if is_strictly_increasing(cu_a) and is_strictly_increasing(cu_b):
-                    unload = series_curve(cu_a, cu_b)
-                else:
-                    unload = cu_a if ua is not None else cu_b
-            slope = (1.0 / (1.0 / sa + 1.0 / sb)
-                     if (sa is not None and sb is not None and sa > 0 and sb > 0)
-                     else None)
-            char = ContactCharacteristic(load, unload, slope, xa + xb, la, lb)
+                # Each surface keeps its own hysteresis history.
+                char = SeriesHysteresisCharacteristic(la, ua, sa, xa, lb, ub, sb, xb)
+            else:
+                char = ContactCharacteristic(series_curve(la, lb), None, None,
+                                             xa + xb, la, lb)
         else:
             if inc_a and not inc_b:
                 use_a = False
