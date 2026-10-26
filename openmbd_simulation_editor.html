@@ -257,7 +257,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
     <div class="wc-logo">Open<span>MBD</span></div>
     <div class="wc-sub2">Simulation Editor</div>
     <div class="wc-sub">Set up initial pose, joint velocities and torque pulses for up to three models then save a config file that loads into the simulator.</div>
-    <div class="wc-sub" style="font-size:11px">Model files (e.g. openmbd_male.json) are not built in. Load each one with <b>Browse</b> after opening the editor or a config.</div>
+    <div class="wc-sub" style="font-size:11px">Model files are not built in. Load each one with <b>Browse</b> after opening the editor or a config.</div>
     <hr class="wc-sep">
     <div class="wc-btns">
       <button class="wc-btn pri" onclick="dismissWelcome()">✦ New Config</button>
@@ -511,7 +511,7 @@ function createModel(id, isDefault) {
   const posX = id === 0 ? '0.0' : (id === 1 ? '1.0' : '2.0');
   const m = {
     id,
-    path: 'openmbd_male.json',
+    path: '',
     pos: isDefault ? '0.0 0.0 1.05' : `${posX} 0.0 0.95`,
     vel: '0.0 0.0 0.0',
     joints: {}, joint_vels: {}, joint_torques: {},
@@ -601,6 +601,10 @@ function onModelFileLoad(e) {
 function loadModelFromPath() {
   const m = sim.models[selModelId]; if (!m) return;
   const fname = String(m.path || '').split(/[\\/]/).pop();
+  if (!fname) {
+    alert('No model file selected.\n\n' + MANUAL_LOAD_NOTE);
+    return;
+  }
   const data = uploadedModelData[fname];
   if (!data) {
     alert(`Could not find "${fname}".\n\n` + MANUAL_LOAD_NOTE);
@@ -852,7 +856,7 @@ function importConfig(data) {
   modelsData.forEach(d => {
     const mid = d.id;
     if (mid === undefined || mid === null || mid < 0 || mid >= MAX_MODELS) return;
-    const path = d.path || 'openmbd_male.json';
+    const path = d.path || '';
     const fname = String(path).split(/[\\/]/).pop();
     const m = {
       id: mid, path,
@@ -865,7 +869,7 @@ function importConfig(data) {
     };
     const known = uploadedModelData[fname];
     if (known) applyLoadedModel(m, known);
-    else missing.push(`${MODEL_LABELS[mid]}: ${fname}`);
+    else missing.push(`${MODEL_LABELS[mid]}: ${fname || '(no file set)'}`);
     sim.models[mid] = m;
   });
 
@@ -1091,8 +1095,8 @@ function fitCameraToScene() {
 function dismissWelcome() { document.getElementById('welcome').classList.remove('open'); }
 
 // ═══════════════════════════════════════════════════════════════════════
-// STARTUP — Model A starts with path openmbd_male.json at 0.0 0.0 1.05,
-// unloaded until the file is supplied with Browse.
+// STARTUP — Model A starts empty at 0.0 0.0 1.05, unloaded until a model
+// file is supplied with Browse.
 // ═══════════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
   initThree();
